@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module BEncode where
+
 import qualified Data.Map as M
+import qualified Data.ByteString.Char8 as BS
 import Data.Maybe (isNothing, fromJust)
 import Data.List (foldl', unfoldr)
 
@@ -32,8 +34,8 @@ digitToI _   = Nothing
 
 test :: String -> IO (Run BEncode)
 test filePath = do
-  xs <- readFile filePath
-  return $ decode xs
+  xs <- BS.readFile filePath
+  return $ decode $ BS.unpack xs
 
 letterToEmpty :: Char -> Maybe BEncode
 letterToEmpty 'd' = Just $ BDict M.empty
