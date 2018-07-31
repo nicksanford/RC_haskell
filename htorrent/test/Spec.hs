@@ -25,18 +25,17 @@ instance Arbitrary BEncode where
 
 
 charsToMaybeInt_prop :: Positive Int -> Bool
-charsToMaybeInt_prop (Positive xs) = (charsToMaybeInt stringifiedXs) == (Just xs)
-  where stringifiedXs = show xs
+charsToMaybeInt_prop (Positive x) = (charsToMaybeInt stringifiedXs) == (Just x)
+  where stringifiedXs = show x
 
 main :: IO ()
 main = hspec $ do
-  describe "charsToMaybeInt" $ do
-    it "follows the property that any number, when stringified is able to be reparsed" $ do
-      property charsToMaybeInt_prop
 
   describe "decode" $ do
-    -- describe "round trip property" $ do
-    --   it "should decode any valid encoded BEncode datatype" $ do
+    describe "charsToMaybeInt_prop" $ do
+      it "it to have the round trip property" $ do
+        quickCheck charsToMaybeInt_prop
+
     describe "strings" $ do
       it "can parse an empty string" $ do
         decode "0:" `shouldBe` Run  "" (Just (BString ""))
