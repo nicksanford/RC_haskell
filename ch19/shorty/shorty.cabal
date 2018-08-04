@@ -28,6 +28,9 @@ library
                      , text
                      , transformers
                      , hedis
+                     , wai-extra
+                     , http-types
+                     , data-default-class
   default-language:    Haskell2010
 
 executable shorty-exe
