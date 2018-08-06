@@ -11,22 +11,28 @@ import Data.Map as M
 --              | BList [BEncode]
 --              | BDict (M.Map BEncode BEncode)
 --              deriving (Eq, Show, Ord)
-instance Arbitrary BEncode where
-  arbitrary = do
-    r <- arbitrary
-    x <- arbitrary
-    y <- arbitrary
-    z <- arbitrary
-    frequency [ (1, return $ BInteger r)
-              , (1, return $ BString x)
-              , (1, return $ BList y)
-              , (1, return $ BDict z)
-              ]
+sizedBencode :: Int -> Gen BEncode
+sizedBencode c
+  | c <= 0 = do
+    i <- arbitrary
+    s <- arbitrary
+    elements [ BInteger i, BString s ]
+  | c <= 10 = do
+    ls <- vectorOf 2 $ sizedBencode (c - 1)
+    ks <- vectorOf 2 (arbitrary :: Gen String)
+    elements [ BList ls
+             , BDict (M.fromList $ zipWith (\k v -> (BString k, v)) ks ls) ]
+  | otherwise = sizedBencode 10
 
+instance Arbitrary BEncode where
+  arbitrary = sized sizedBencode
 
 charsToMaybeInt_prop :: Positive Int -> Bool
 charsToMaybeInt_prop (Positive x) = (charsToMaybeInt stringifiedXs) == (Just x)
   where stringifiedXs = show x
+
+encodeDecodeRoundTrip_prop :: BEncode -> Bool
+encodeDecodeRoundTrip_prop bencode = bencode == ((\(Run "" (Just x)) -> x) . decode . encode $ bencode)
 
 main :: IO ()
 main = hspec $ do
@@ -59,6 +65,8 @@ main = hspec $ do
         decode "l4:spam4:eggse" `shouldBe` Run "" (Just (BList [BString "spam", BString "eggs"]))
       it "parses invalid lists to nothing with the rest maintained" $ do
         decode "l4:spam4:eggsasdf" `shouldBe` Run "l4:spam4:eggsasdf" Nothing
+      it "can parse li4ee" $ do
+        decode "li4ee" `shouldBe` Run "" (Just $ BList [BInteger 4])
 
     describe "dicts" $ do
       it "can parse an empty dict" $ do
@@ -70,3 +78,6 @@ main = hspec $ do
       it "parses lists in dicts" $ do
         decode "d4:spaml1:a1:bee" `shouldBe` Run "" (Just $ BDict $ M.fromList [(BString "spam", BList [BString "a", BString "b"])])
 
+  describe "encode" $ do
+    it "has the round-trip property with encode" $ do
+        quickCheck encodeDecodeRoundTrip_prop

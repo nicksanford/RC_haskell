@@ -4,9 +4,11 @@ module BEncode where
 import qualified Data.Map as M
 import qualified Data.ByteString.Char8 as BS
 import Data.Maybe (isNothing, fromJust)
-import Data.List (foldl', unfoldr)
+import Data.List (foldl', unfoldr, sortOn)
 
 -- https://en.wikipedia.org/wiki/Bencode
+-- NOTE: According to the unofficial wiki, dictionaries can only have strings as their keys, however this should handle that case, and I believe the fact that this type is able to represent potentially invalid bencode binaries shouldn't be a problem in practice: https://wiki.theory.org/index.php/BitTorrentSpecification
+-- Will refactor if I find that to not be the case.
 data BEncode = BInteger Integer
              | BString String
              | BList [BEncode]
@@ -16,8 +18,6 @@ data BEncode = BInteger Integer
 type UnparsedContent = String
 data Run a = Run UnparsedContent (Maybe a) deriving (Eq, Show)
 
-encode :: BEncode -> String
-encode = undefined
 
 digitToI :: Char -> Maybe Int
 digitToI '0' = Just 0
@@ -54,7 +54,7 @@ parseInt ('-':xs) =
     returnValue -> returnValue
 parseInt xs = Run rest maybeBInteger
   where maybeBInteger = fmap (BInteger . fromIntegral) $ charsToMaybeInt $ takeWhile (/= 'e') xs
-        rest = dropWhile (== 'e') $ dropWhile (/= 'e') xs
+        rest = tail $ dropWhile (/= 'e') xs
 
 parseString :: String -> Run BEncode
 parseString xs =
@@ -62,7 +62,7 @@ parseString xs =
     Nothing -> Run xs Nothing
     (Just i) -> Run  (restOfString i) (Just (BString $ string i))
   where afterNumber :: String
-        afterNumber = dropWhile (== ':') $ dropWhile (/= ':') xs
+        afterNumber = tail $ dropWhile (/= ':') xs
         probablyInt :: Maybe Int
         probablyInt = charsToMaybeInt $ takeWhile (/= ':') xs
         string i = take i afterNumber
@@ -82,6 +82,15 @@ unfoldList string = if isNothing maybeBencode
                     then Nothing
                     else Just (Run rest maybeBencode, rest)
     where (Run rest maybeBencode) = decode string
+
+encode :: BEncode -> String
+encode (BInteger i) = concat ["i", show i, "e"]
+encode (BString s) = concat [show $ length s, ":", s]
+encode (BList s) = concat ["l", s >>= encode , "e"]
+encode (BDict d) = concat ["d", go , "e"]
+  where go = concatMap encodeedTuples $ sortOn fst $ M.toList d
+        encodeedTuples :: (BEncode, BEncode) -> String
+        encodeedTuples = (encode . fst) <> (encode . snd)
 
 decode :: String ->  Run BEncode
 decode ('d':xs) =
