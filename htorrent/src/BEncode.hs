@@ -2,10 +2,14 @@
 module BEncode where
 
 import qualified Data.Map as M
-import qualified Data.ByteString.Char8 as BS
-import Data.Maybe (isNothing, fromJust)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as Char8
+--import qualified Data.ByteString.UTF8 as UTF8
+import Crypto.Hash
+import Crypto.Random
+import Data.Maybe (isNothing, fromJust, isJust)
 import Data.List (foldl', unfoldr, sortOn)
-
+  
 -- https://en.wikipedia.org/wiki/Bencode
 -- NOTE: According to the unofficial wiki, dictionaries can only have strings as their keys, however this should handle that case, and I believe the fact that this type is able to represent potentially invalid bencode binaries shouldn't be a problem in practice: https://wiki.theory.org/index.php/BitTorrentSpecification
 -- Will refactor if I find that to not be the case.
@@ -32,10 +36,13 @@ digitToI '8' = Just 8
 digitToI '9' = Just 9
 digitToI _   = Nothing
 
-test :: String -> IO (Run BEncode)
-test filePath = do
+maybeReadBencode :: String -> IO (Maybe BEncode)
+maybeReadBencode filePath = do
   xs <- BS.readFile filePath
-  return $ decode $ BS.unpack xs
+  -- NOTE: Done this way b/c UTF8.toString ends up throwing an error, I think the solution for this is to change the module to just use bytestrings
+  return $ case decode $ Char8.unpack xs of
+    Run "" (Just x) -> Just x
+    _ -> Nothing
 
 letterToEmpty :: Char -> Maybe BEncode
 letterToEmpty 'd' = Just $ BDict M.empty

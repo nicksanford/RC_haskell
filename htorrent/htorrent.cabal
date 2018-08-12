@@ -16,12 +16,21 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     BEncode
+                     , Lib
   build-depends:       base >= 4.7 && < 5
                      , wreq
                      , aeson
                      , lens
                      , containers
                      , bytestring
+                     , cryptonite
+                     , text
+                     , memory
+                     , utf8-string
+                     , network-uri
+                     , byteable
+                     , base16-bytestring
+                     , random
   default-language:    Haskell2010
 
 executable htorrent
@@ -31,6 +40,8 @@ executable htorrent
   build-depends:       base
                      , htorrent
                      , bytestring
+                     , containers
+                     , utf8-string
   default-language:    Haskell2010
 
 test-suite htorrent-test
