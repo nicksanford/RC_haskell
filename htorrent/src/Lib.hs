@@ -4,16 +4,17 @@ module Lib where
 import BEncode
 
 import Network.Wreq
+import qualified Network.HTTP.Simple as HTTP
 import Control.Lens
 
 import Data.List
 import qualified  System.Random as R
   
-import qualified Data.Byteable as Byteable
+--import qualified Data.Byteable as Byteable
 
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as LBS
-import qualified Data.ByteString.Char8 as Char8
+import qualified Data.ByteString.Lazy as BL
+--import qualified Data.ByteString.Char8 as Char8
 
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Base16 as B16
@@ -29,10 +30,10 @@ import qualified Data.ByteArray.Encoding as BAE
 
 import Data.Maybe (isNothing, fromJust, isJust)
   
-import Control.Monad (join)
+--import Control.Monad (join)
 import Crypto.Random (getRandomBytes)
 
-import qualified Network.URI as URI
+--import qualified Network.URI as URI
 
 newtype Announce e = Announce e deriving (Eq, Show)
 newtype Name e = Name e deriving (Eq, Show)
@@ -45,11 +46,11 @@ newtype PieceLength e = PieceLength e deriving (Eq, Show)
 newtype Pieces e = Pieces e deriving (Eq, Show)
 newtype InfoHash e = InfoHash e deriving (Eq, Show)
 
-data SingleFileInfo = SingleFileInfo (Name String) (Length Integer) (MD5Sum (Maybe String)) deriving (Eq, Show)
-data DirectoryFile = DirectoryFile (Path String) (Length Integer) (MD5Sum (Maybe String)) deriving (Eq, Show)
-data DirectoryInfo = DirectoryInfo (Name String) (Files [DirectoryFile]) deriving (Eq, Show)
+data SingleFileInfo = SingleFileInfo (Name BS.ByteString) (Length Integer) (MD5Sum (Maybe BS.ByteString)) deriving (Eq, Show)
+data DirectoryFile = DirectoryFile (Path BS.ByteString) (Length Integer) (MD5Sum (Maybe BS.ByteString)) deriving (Eq, Show)
+data DirectoryInfo = DirectoryInfo (Name BS.ByteString) (Files [DirectoryFile]) deriving (Eq, Show)
 
-data Tracker = Tracker (Announce String) (PieceLength Integer) (Pieces String) (InfoHash String) (Maybe SingleFileInfo) (Maybe DirectoryInfo) (Maybe (Encoding String)) deriving (Eq, Show)
+data Tracker = Tracker (Announce BS.ByteString) (PieceLength Integer) (Pieces BS.ByteString) (InfoHash BS.ByteString) (Maybe SingleFileInfo) (Maybe DirectoryInfo) (Maybe (Encoding BS.ByteString)) deriving (Eq, Show)
 
 getSingleFileLength :: SingleFileInfo -> Integer
 getSingleFileLength (SingleFileInfo _ (Length l) _) = l
@@ -60,7 +61,7 @@ getDirectoryFileLength (DirectoryFile _ (Length l) _) = l
 getDirectoryInfoFiles :: DirectoryInfo -> [DirectoryFile]
 getDirectoryInfoFiles (DirectoryInfo _ (Files xs)) = xs
 
-bencodeToMaybeString :: BEncode -> Maybe String
+bencodeToMaybeString :: BEncode -> Maybe BS.ByteString
 bencodeToMaybeString (BString a) = Just a
 bencodeToMaybeString _           = Nothing
 
@@ -85,7 +86,7 @@ dictToMaybeDirectoryFile _ = Nothing
 
 toTracker :: BEncode -> Maybe Tracker
 toTracker (BDict d) =  buildTracker <$> maybeAnnounce <*> maybePieceLength <*> maybePieces <*> maybeInfoHash >>= validateTracker
-  where buildTracker :: Announce String -> PieceLength Integer -> Pieces String -> InfoHash String-> Tracker
+  where buildTracker :: Announce BS.ByteString -> PieceLength Integer -> Pieces BS.ByteString -> InfoHash BS.ByteString-> Tracker
         buildTracker a pl p i = Tracker a pl p i singleFileInfo directoryInfo maybeEncoding
         validateTracker :: Tracker -> Maybe Tracker
         validateTracker t@(Tracker _ _ _ _ sfi dfi _)
@@ -93,9 +94,9 @@ toTracker (BDict d) =  buildTracker <$> maybeAnnounce <*> maybePieceLength <*> m
           | otherwise = Just t
         l :: BEncode -> Maybe BEncode
         l x = M.lookup (BString "info") d >>= bencodeToMaybeDict >>= M.lookup x
-        maybeInfoHash :: Maybe (InfoHash String)
+        maybeInfoHash :: Maybe (InfoHash BS.ByteString)
         maybeInfoHash = InfoHash <$> (shaHash . encode) <$> (M.lookup (BString "info") d)
-        maybeAnnounce :: Maybe (Announce String)
+        maybeAnnounce :: Maybe (Announce BS.ByteString)
         maybeAnnounce =  Announce <$> (M.lookup (BString "announce") d >>= bencodeToMaybeString)
         singleFileInfo :: Maybe SingleFileInfo
         singleFileInfo = SingleFileInfo <$> (Name <$> (l (BString "name") >>= bencodeToMaybeString)) 
@@ -104,11 +105,11 @@ toTracker (BDict d) =  buildTracker <$> maybeAnnounce <*> maybePieceLength <*> m
         directoryInfo :: Maybe DirectoryInfo
         directoryInfo = DirectoryInfo <$> (Name <$> (l (BString "name") >>= bencodeToMaybeString))
                                       <*> (Files <$> (l (BString "files") >>= bencodeToMaybeDirectoryFile))
-        maybeEncoding :: Maybe (Encoding String)
+        maybeEncoding :: Maybe (Encoding BS.ByteString)
         maybeEncoding = Encoding <$> (M.lookup (BString "encoding") d >>= bencodeToMaybeString)
         maybePieceLength :: Maybe (PieceLength Integer)
         maybePieceLength = PieceLength <$> (l (BString "piece length") >>= bencodeToMaybeInteger)
-        maybePieces :: Maybe (Pieces String)
+        maybePieces :: Maybe (Pieces BS.ByteString)
         maybePieces = Pieces <$> (l (BString "pieces") >>= bencodeToMaybeString)
 toTracker _ = Nothing
 
@@ -146,8 +147,25 @@ start filePath = do
 randomBytes :: Int -> IO BS.ByteString
 randomBytes  = getRandomBytes
 
--- escape :: BS.ByteString -> BS.ByteString
--- escape =
+unescape :: BS.ByteString -> BS.ByteString
+unescape x = case fmap (\(a,b) -> (BS.singleton a, id b)) (BS.uncons x) of
+  Nothing -> x
+  (Just ("%", rest)) -> BS.concat [(BS.take 2 rest), unescape $ BS.drop 2 rest]
+  -- figure out how to do the ord stuff
+  (Just (first, rest)) -> BS.concat [(BS.take 2 rest), unescape $ BS.drop 2 rest]
+
+allowed :: BS.ByteString
+allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXZYZ0123456789.-_~"
+
+escape :: BS.ByteString -> BS.ByteString
+escape x = case fmap (\(a,b) -> (BS.singleton a, id b)) (BS.uncons x) of
+  Nothing -> x
+  _ -> do
+    let nextByte = BS.take 2 x
+    let charOfByte = fst $ B16.decode $ nextByte
+    if isJust $ BS.findSubstring charOfByte allowed
+      then BS.concat [charOfByte, escape $ BS.drop 2 x]
+      else BS.concat ["%", nextByte, escape $ BS.drop 2 x]
   
 -- def decode(x):
 --     if not x:
@@ -155,8 +173,7 @@ randomBytes  = getRandomBytes
 
 --     if x[0] == '%':
 --         return x[1:3] + decode(x[3:])
---     else:
---         return format(ord(x[0]), '02x') + decode(x[1:])
+--     else: --         return format(ord(x[0]), '02x') + decode(x[1:])
 
 
 -- def encode(x):
@@ -171,57 +188,75 @@ randomBytes  = getRandomBytes
 
 --g <- R.getStdGen 
 
-alphaNumsList :: String
-alphaNumsList = ['a'..'z'] ++ ['0'..'9'] 
+alphaNumsList :: BS.ByteString
+alphaNumsList = "abcdefghijklmnopqrstuvwzyz0123456789"
   
-alphaNums :: R.StdGen -> String
+--alphaNums :: R.StdGen -> BS.ByteString
 alphaNums g = unfoldr f (randomIndexFromSeed g)
-  where f (i, newG) = Just (alphaNumsList !! i, randomIndexFromSeed newG)
-        randomIndexFromSeed = R.randomR (0, length alphaNumsList - 1)
+  where f (i, newG) = Just (BS.index alphaNumsList i, randomIndexFromSeed newG)
+        randomIndexFromSeed = R.randomR (0, BS.length alphaNumsList - 1)
 
-getPeerID :: IO String
+getPeerID :: IO BS.ByteString
 getPeerID = do
   g <- R.getStdGen
-  return $ "-TR2940-" <>  (take 12 $ alphaNums g)
+  return $ BS.concat ["-TR2940-",  (BS.pack $ take 12 $ alphaNums g)]
+-- curl http://tracker.archlinux.org:6969/announce\?info_hash\=V%96%e5W%28%c4%0c%92%9c%d0%90s%a5%c2c%81%84%fc%e0%18\&peer_id\=-TR2940-tw3hjli2yig7\&port\=51413\&uploaded\=0\&downloaded\=0\&left\=22036480\&numwant\=80\&key\=44421c03\&compact\=1\&supportcrypto\=1\&event\=started\&ipv6\=2001%3A458%3A3%3A100%3A29ad%3Add0e%3A7f4d%3A5361
 
-trackerRequest :: String -> Tracker -> IO String
-trackerRequest peer_id (Tracker (Announce url) _ _ (InfoHash info_hash) (maybeSingleFileInfo) (maybeDirectoryInfo) _) =
-  fmap show $ getWith params url 
-  where params = defaults & param "info_hash" .~ [T.pack info_hash]
---  where params = defaults & param "info_hash" .~ [TE.decodeASCII . fst . B16.decode . UTF8.fromString $ info_hash]
-                          & param "port" .~ [T.pack $ show 6882]
-                          & param "uploaded" .~ ["0"]
-                          & param "downloaded" .~ ["0"]
-                          & param "left" .~ [T.pack $ show left]
-                          & param "compact".~ ["1"]
-                          & param "event".~ ["started"]
-                          & param "peer_id".~ [T.pack  peer_id]
+trackerRequest :: BS.ByteString -> Tracker -> IO String
+trackerRequest peer_id (Tracker (Announce url) _ _ (InfoHash info_hash) (maybeSingleFileInfo) (maybeDirectoryInfo) _) = do
+  --request' <- HTTP.parseRequest $ concat ["GET ", UTF8.toString url]
+  -- let request =
+  --       HTTP.setRequestQueryString [("port", return "6882"),
+  --                                   ("uploaded", return "0"),
+  --                                   ("downloaded", return "0"),
+  --                                   ("left", return $ UTF8.fromString $ show left),
+  --                                   ("event", return "started"),
+  --                                   ("peer_id", return peer_id)] $ request'
+  request <- HTTP.parseRequest $ UTF8.toString $ BS.concat [url, "?peer_id=", peer_id, "&left=", UTF8.fromString $ show left, "&event=started&port=6882&uploaded=0&downloaded=0", "&info_hash=", escape info_hash]
+  response <- HTTP.httpLbs request
 
-        left = if isJust maybeSingleFileInfo
-               then  getSingleFileLength $ fromJust maybeSingleFileInfo
-               else sum $ fmap getDirectoryFileLength $ getDirectoryInfoFiles $ fromJust maybeDirectoryInfo
+  --HTTP.httpLbs "http://tracker.archlinux.org:6969/announce?info_hash=V%96%e5W%28%c4%0c%92%9c%d0%90s%a5%c2c%81%84%fc%e0%18&peer_id=-TR2940-tw3hjli2yig7&port=51413&uploaded=0&downloaded=0&left=22036480&event=started"
+  --response <- getWith (buildParams peer_id info_hash maybeSingleFileInfo maybeDirectoryInfo) (UTF8.toString url)
+  print response
+  return $ show response
+  where left = if isJust maybeSingleFileInfo
+              then  getSingleFileLength $ fromJust maybeSingleFileInfo
+              else sum $ fmap getDirectoryFileLength $ getDirectoryInfoFiles $ fromJust maybeDirectoryInfo
 
-trackerRequestTest :: String -> String -> Tracker -> IO String
+buildParams peer_id info_hash maybeSingleFileInfo maybeDirectoryInfo =
+  defaults & param "info_hash" .~ [TE.decodeUtf8 $ info_hash]
+                        & param "port" .~ [T.pack $ show 6882]
+                        & param "uploaded" .~ ["0"]
+                        & param "downloaded" .~ ["0"]
+                        & param "left" .~ [T.pack $ show left]
+                        & param "compact".~ ["1"]
+                        & param "event".~ ["started"]
+                        & param "numwant".~ ["80"]
+                        & param "supportcrypto".~ ["1"]
+                        & param "peer_id".~ [TE.decodeUtf8 peer_id]
+
+  where left = if isJust maybeSingleFileInfo
+              then  getSingleFileLength $ fromJust maybeSingleFileInfo
+              else sum $ fmap getDirectoryFileLength $ getDirectoryInfoFiles $ fromJust maybeDirectoryInfo
+
+trackerRequestTest :: BS.ByteString -> BS.ByteString -> Tracker -> IO String
 trackerRequestTest url peer_id (Tracker _ _ _ (InfoHash info_hash) (maybeSingleFileInfo) (maybeDirectoryInfo) _) =
-  fmap show $ getWith params url 
-  where params = defaults & param "info_hash" .~ [TE.decodeLatin1 . fst . B16.decode . Char8.pack $ info_hash]
+  fmap show $ getWith p $ UTF8.toString url
+  where p = defaults & param "info_hash" .~ [TE.decodeUtf8 . fst . B16.decode $ info_hash]
                           & param "port" .~ [T.pack $ show 6882]
                           & param "uploaded" .~ ["0"]
                           & param "downloaded" .~ ["0"]
                           & param "left" .~ [T.pack $ show left]
                           & param "compact".~ ["1"]
                           & param "event".~ ["started"]
-                          & param "peer_id".~ [T.pack  peer_id]
+                          & param "peer_id".~ [TE.decodeUtf8 peer_id]
 
         left = if isJust maybeSingleFileInfo
                then  getSingleFileLength $ fromJust maybeSingleFileInfo
                else sum $ fmap getDirectoryFileLength $ getDirectoryInfoFiles $ fromJust maybeDirectoryInfo
 
-shaHash ::  String -> String
-shaHash = T.unpack . TE.decodeUtf8 . shaHashBS . TE.encodeUtf8 . T.pack
-
-shaHashBS :: BS.ByteString -> BS.ByteString
-shaHashBS = BS.pack . BS.unpack . (BA.convert . (BAE.convertToBase BAE.Base16 :: C.Digest C.SHA1 -> BS.ByteString) .  (C.hashWith C.SHA1 :: BS.ByteString -> C.Digest C.SHA1))
+shaHash :: BS.ByteString -> BS.ByteString
+shaHash = BS.pack . BS.unpack . (BA.convert . (BAE.convertToBase BAE.Base16 :: C.Digest C.SHA1 -> BS.ByteString) .  (C.hashWith C.SHA1 :: BS.ByteString -> C.Digest C.SHA1))
 
 decodedHex = "123456789abcdef123456789abcdef123456789a" :: BS.ByteString
 --(Char8.pack $ Char8.unpack x) == x => True

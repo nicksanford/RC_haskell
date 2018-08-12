@@ -1,10 +1,13 @@
+{-# LANGUAGE OverloadedStrings #-}
 import Test.Hspec
 import Test.QuickCheck
 import Test.QuickCheck.Checkers
 import Test.QuickCheck.Classes
 
 import BEncode
-import Data.Map as M
+import qualified Data.Map as M
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.UTF8 as UTF8
 
 -- data BEncode = BInteger Integer
 --              | BString String
@@ -15,11 +18,11 @@ sizedBencode :: Int -> Gen BEncode
 sizedBencode c
   | c <= 0 = do
     i <- arbitrary
-    s <- arbitrary
+    s <- fmap UTF8.fromString arbitrary
     elements [ BInteger i, BString s ]
   | c <= 10 = do
     ls <- vectorOf 2 $ sizedBencode (c - 1)
-    ks <- vectorOf 2 (arbitrary :: Gen String)
+    ks <- vectorOf 2 (fmap UTF8.fromString arbitrary)
     elements [ BList ls
              , BDict (M.fromList $ zipWith (\k v -> (BString k, v)) ks ls) ]
   | otherwise = sizedBencode 10
@@ -29,7 +32,7 @@ instance Arbitrary BEncode where
 
 charsToMaybeInt_prop :: Positive Int -> Bool
 charsToMaybeInt_prop (Positive x) = (charsToMaybeInt stringifiedXs) == (Just x)
-  where stringifiedXs = show x
+  where stringifiedXs = UTF8.fromString $ show x
 
 encodeDecodeRoundTrip_prop :: BEncode -> Bool
 encodeDecodeRoundTrip_prop bencode = bencode == ((\(Run "" (Just x)) -> x) . decode . encode $ bencode)
