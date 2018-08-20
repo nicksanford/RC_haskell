@@ -4,9 +4,8 @@ module BEncode where
 import qualified Data.Map as M
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
-import Crypto.Random
-import Data.Maybe (isNothing, fromJust, isJust, fromMaybe)
-import Data.List (foldl', unfoldr, sortOn)
+import Data.Maybe (isNothing, fromJust, fromMaybe)
+import Data.List (unfoldr, sortOn)
   
 -- https://en.wikipedia.org/wiki/Bencode
 -- NOTE: According to the unofficial wiki, dictionaries can only have strings as their keys, however this should handle that case, and I believe the fact that this type is able to represent potentially invalid bencode binaries shouldn't be a problem in practice: https://wiki.theory.org/index.php/BitTorrentSpecification
@@ -22,6 +21,7 @@ data Run a = Run UnparsedContent (Maybe a) deriving (Eq, Show)
 
 
 digitToI = digitToI' . BS.singleton
+
 digitToI' :: BS.ByteString -> Maybe Int
 digitToI' "0" = Just 0
 digitToI' "1" = Just 1
@@ -35,13 +35,13 @@ digitToI' "8" = Just 8
 digitToI' "9" = Just 9
 digitToI' _   = Nothing
 
-maybeReadBencode :: String -> IO (Maybe BEncode)
+maybeReadBencode :: String -> IO (Either BS.ByteString BEncode)
 maybeReadBencode filePath = do
   xs <- BS.readFile filePath
   -- NOTE: Done this way b/c UTF8.toString ends up throwing an error, I think the solution for this is to change the module to just use byte strings
   return $ case decode xs of
-    Run "" (Just x) -> Just x
-    _ -> Nothing
+    Run "" (Just x) -> Right x
+    Run unparsed _ -> Left $ BS.concat ["ERROR: Hit a BEncode parse error, stopped parsing at", unparsed]
 
 -- letterToEmpty :: Char -> Maybe BEncode
 -- letterToEmpty 'd' = Just $ BDict M.empty
@@ -105,7 +105,6 @@ decodeType PDict xs =
         maybeRest =  (maybeHead (reverse unfold)) >>= restToMaybe
         restToMaybe :: (Run BEncode, Run BEncode) -> Maybe BS.ByteString
         restToMaybe (_, (Run (rs) _)) = (BS.uncons rs) >>= (\(r, rest) -> if isEnd r then Just rest else Nothing)
-        restToMaybe _ = Nothing
 
 decodeType PList xs =
   case (unfold, isNothing maybeRest) of

@@ -98,9 +98,7 @@ app = do
   get "/" $ do
     rConn <- lift $ asks rConn
     uri <- param "uri"
-    run rConn uri
-
-  get "/:short" $ do
+    run rConn uri get "/:short" $ do
     rConn <- lift $ asks rConn
     short <- param "short"
     uri <- liftIO (getURI rConn short)

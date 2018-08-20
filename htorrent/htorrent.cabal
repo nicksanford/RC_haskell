@@ -17,6 +17,7 @@ library
   hs-source-dirs:      src
   exposed-modules:     BEncode
                      , Lib
+                     , Server
   build-depends:       base >= 4.7 && < 5
                      , wreq
                      , aeson
@@ -32,6 +33,10 @@ library
                      , base16-bytestring
                      , random
                      , http-conduit
+                     , word8
+                     , binary
+                     , network-simple
+                     , network
   default-language:    Haskell2010
 
 executable htorrent
