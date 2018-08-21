@@ -1,2 +1,5 @@
 .stack-work
 *.pyc
+*.swp
+*.swo
+*.swn

@@ -5,9 +5,6 @@ import Network.Simple.TCP (serve, HostPreference (Host), Socket, SockAddr, send,
 import Text.Printf (printf)
 import qualified Data.ByteString as BS
 
-
-
-
 conn :: (Socket, SockAddr) -> IO ()
 conn (connectionSocket, remoteAddr) = do
   print $ "TCP connection established from " ++ show remoteAddr

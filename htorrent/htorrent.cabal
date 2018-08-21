@@ -18,6 +18,9 @@ library
   exposed-modules:     BEncode
                      , Lib
                      , Server
+                     , Tracker
+                     , Utils
+                     , Peer
   build-depends:       base >= 4.7 && < 5
                      , wreq
                      , aeson

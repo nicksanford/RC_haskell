@@ -1,15 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 module BEncode where
 
-import qualified Data.Map as M
+import Data.List (unfoldr, sortOn)
+import Data.Maybe (isNothing, fromJust, fromMaybe)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
-import Data.Maybe (isNothing, fromJust, fromMaybe)
-import Data.List (unfoldr, sortOn)
-  
--- https://en.wikipedia.org/wiki/Bencode
--- NOTE: According to the unofficial wiki, dictionaries can only have strings as their keys, however this should handle that case, and I believe the fact that this type is able to represent potentially invalid bencode binaries shouldn't be a problem in practice: https://wiki.theory.org/index.php/BitTorrentSpecification
--- Will refactor if I find that to not be the case.
+import qualified Data.Map as M
+
 data BEncode = BInteger Integer
              | BString BS.ByteString
              | BList [BEncode]
@@ -42,17 +39,6 @@ maybeReadBencode filePath = do
   return $ case decode xs of
     Run "" (Just x) -> Right x
     Run unparsed _ -> Left $ BS.concat ["ERROR: Hit a BEncode parse error, stopped parsing at", unparsed]
-
--- letterToEmpty :: Char -> Maybe BEncode
--- letterToEmpty 'd' = Just $ BDict M.empty
--- letterToEmpty 'l' = Just $ BList []
--- letterToEmpty 'i' = Just $ BInteger 0
--- letterToEmpty x = if isNum x
---                   then Just $ BString ""
---                   else Nothing
--- isNum :: Char -> Bool
--- isNum = (`BS.elem` ("0123456789"::BS.ByteString))
-
 
 makeDict :: BS.ByteString -> Maybe ((Run BEncode, Run BEncode), BS.ByteString)
 makeDict xs = (BS.uncons xs) >>= (\(x, rest) -> if isEnd x then Nothing else makeDict' xs)
@@ -154,7 +140,6 @@ parseString xs =
         restOfString i = BS.drop i afterNumber
         isNotSeparator = (/= ":") . BS.singleton
 
-
 maybeHead :: [a] -> Maybe a
 maybeHead [] = Nothing
 maybeHead (x:_) = Just x
@@ -163,3 +148,16 @@ charsToMaybeInt :: BS.ByteString -> Maybe Int
 charsToMaybeInt = BS.foldl' charsToMaybeIntFold (Just 0)
   where charsToMaybeIntFold Nothing _ = Nothing
         charsToMaybeIntFold (Just sumInt) word = (+) (sumInt * 10) <$> digitToI word
+
+-- Convenience Functions
+bencodeToMaybeString :: BEncode -> Maybe BS.ByteString
+bencodeToMaybeString (BString a) = Just a
+bencodeToMaybeString _           = Nothing
+
+bencodeToMaybeInteger :: BEncode -> Maybe Integer
+bencodeToMaybeInteger (BInteger a) = Just a
+bencodeToMaybeInteger _           = Nothing
+
+bencodeToMaybeDict :: BEncode -> Maybe (M.Map BEncode BEncode)
+bencodeToMaybeDict (BDict a) = Just a
+bencodeToMaybeDict _         = Nothing
