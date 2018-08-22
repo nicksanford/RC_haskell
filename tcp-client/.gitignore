@@ -1,0 +1,6 @@
+.stack-work/
+tcp-client.cabal
+*~
+*.swp
+*.swn
+*.swo
