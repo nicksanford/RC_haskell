@@ -2,10 +2,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Control.Concurrent (forkFinally)
+import Control.Concurrent (forkFinally, threadDelay) -- threadWaitRead, threadWaitWrite
 import qualified Control.Exception as E
 import Control.Monad (unless, forever, void)
 import qualified Data.ByteString as S
+import qualified Data.ByteString.UTF8 as UTF8
 import Network.Socket hiding (recv, send)
 import Network.Socket.ByteString (recv, sendAll, send)
 
@@ -17,7 +18,6 @@ main = withSocketsDo $ do
   -- once that is done, we set some security stuff and listen for 10 connections??? 
   -- we then enter a loop which accepts the socket (what does it get back?) and forks a thread to handle talking to the socket
   -- that thread itself is also a loop
-  -- if the thread hits an error it closes the connection
   -- The child thread waits (I think???) for 1024 bytes from the initiator and responds with (sendAll not sure what this does
   -- This will keep all connections open until an exception is thrown, I wonder  if one will be thrown if I kill the client connection??
   -- what does void do?
@@ -30,7 +30,7 @@ main = withSocketsDo $ do
               addrFlags = [AI_PASSIVE]
             , addrSocketType = Stream
             }
-      addr:_ <- getAddrInfo (Just hints) Nothing (Just port)
+      addr:_ <- getAddrInfo (Just hints) Nothing (Just port) -- what does getAddrInfo do?
       print addr
       return addr
     open addr = do
@@ -47,11 +47,17 @@ main = withSocketsDo $ do
     loop sock = forever $ do
       (conn, peer) <- accept sock
       putStrLn $ "Connection from " ++ show peer
-      void $ forkFinally (talk conn) (\_ -> print ("closing " ++ (show conn) ++ "from" ++ (show peer)) >> close conn)
-    talk conn = do
+      void $ forkFinally (talk conn peer) (\_ -> print ("closing " ++ (show conn) ++ "from" ++ (show peer)) >> close conn)
+    talk conn peer = do
       print "waiting for some stuff"
       msg <- recv conn 1024
-      print (S.concat ["got some stuff", msg])
+      print (S.concat ["got some stuff: ", msg, "from ", (UTF8.fromString $ show peer)])
       unless (S.null msg) $ do
-        send conn msg
-        talk conn
+        send conn "I'm going to start saying hi"
+        delayLoop conn 0
+
+    delayLoop conn i = do
+      sendAll conn $ S.concat ["hi! ", UTF8.fromString $ show i]
+      threadDelay 5000000
+      delayLoop conn (i+1)
+
