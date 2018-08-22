@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Lib where
 
-
 import qualified BEncode
 import qualified Peer
 import Tracker (trackerRequest, toTracker, TrackerResponse (..), Peers (..))
@@ -27,8 +26,8 @@ run filename host port = do
               printf "got to just tracker response %s" $ show t
               let maybePeers :: [IO (Maybe Peer.PeerResponse)]
                   maybePeers = (fmap (Peer.initiateHandshake tracker)  peers)
-              responses <- sequence maybePeers
-              print "these are the responses"
+              responses <- head maybePeers
+              print "this is the response"
               print responses
     Left error ->
       print error
