@@ -6,8 +6,8 @@ import Control.Concurrent (forkFinally)
 import qualified Control.Exception as E
 import Control.Monad (unless, forever, void)
 import qualified Data.ByteString as S
-import Network.Socket hiding (recv)
-import Network.Socket.ByteString (recv, sendAll)
+import Network.Socket hiding (recv, send)
+import Network.Socket.ByteString (recv, sendAll, send)
 
 main :: IO ()
 main = withSocketsDo $ do
@@ -21,6 +21,8 @@ main = withSocketsDo $ do
   -- The child thread waits (I think???) for 1024 bytes from the initiator and responds with (sendAll not sure what this does
   -- This will keep all connections open until an exception is thrown, I wonder  if one will be thrown if I kill the client connection??
   -- what does void do?
+  -- I think that actually what is happening is that when the child thread stops receiving data (as denoted by S.null msg) it will stop recursing through talk. That will trigger the forkFinally to execute it's last parameter, which will close the connection.
+  -- maybe I can start a simple try keeping all connections open and send a 'Hi! <address>' every 5 second:.
   E.bracket (open addr) close loop
   where
     resolve port = do
@@ -51,5 +53,5 @@ main = withSocketsDo $ do
       msg <- recv conn 1024
       print (S.concat ["got some stuff", msg])
       unless (S.null msg) $ do
-        sendAll conn msg
+        send conn msg
         talk conn
