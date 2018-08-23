@@ -100,8 +100,9 @@ createTrackerRequestPayload (Tracker (PeerId peer_id) (Announce url) _ _ (InfoHa
                                                   , "&info_hash=", escape info_hash
                                                   ]
 
+-- TODO delete the host parameter
 trackerRequest :: Tracker -> BS.ByteString -> Integer -> IO (Maybe TrackerResponse)
-trackerRequest tracker host port =
+trackerRequest tracker _host port =
   HTTP.parseRequest (createTrackerRequestPayload tracker port) >>=
   HTTP.httpBS >>=
   handleTrackerRequest

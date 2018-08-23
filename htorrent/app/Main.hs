@@ -22,4 +22,4 @@ main :: IO ()
 main = do
   args <- SE.getArgs
   forkIO $ Lib.run  (head args) host port
-  Server.run (UTF8.toString host) (show port)
+  Server.run (show port)
