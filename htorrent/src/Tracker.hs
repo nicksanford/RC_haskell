@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Tracker where
 
+import Data.List (unfoldr)
 import Data.Maybe (fromJust, isNothing, isJust)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
@@ -45,7 +46,7 @@ type Port = Integer
 -- TODO: You will need to implement a Maybe PeerId here as it is possible for that to be provided. If it is, then you need to verify that the peer id you get back from the handshake is the same as what the tracker said.
 data Peer = Peer IP Port deriving (Eq, Show)
 
-data Tracker = Tracker (PeerId BS.ByteString) (Announce BS.ByteString) (PieceLength Integer) (Pieces BS.ByteString) (InfoHash BS.ByteString) (Maybe SingleFileInfo) (Maybe DirectoryInfo) (Maybe (Encoding BS.ByteString)) deriving (Eq, Show)
+data Tracker = Tracker (PeerId BS.ByteString) (Announce BS.ByteString) (PieceLength Integer) (Pieces [BS.ByteString]) (InfoHash BS.ByteString) (Maybe SingleFileInfo) (Maybe DirectoryInfo) (Maybe (Encoding BS.ByteString)) deriving (Eq, Show)
 
 data TrackerResponse = TrackerResponse (Peers [Peer]) 
                                        (Maybe (TrackerId BS.ByteString)) 
@@ -57,7 +58,7 @@ data TrackerResponse = TrackerResponse (Peers [Peer])
 
 toTracker :: BS.ByteString -> BEncode -> Either BS.ByteString Tracker
 toTracker peer_id (BDict d) = maybe (Left "ERROR: tracker invalid") Right $  buildTracker <$> (Just $ PeerId peer_id) <*> maybeAnnounce <*> maybePieceLength <*> maybePieces <*> maybeInfoHash >>= validateTracker
-  where buildTracker :: PeerId BS.ByteString -> Announce BS.ByteString -> PieceLength Integer -> Pieces BS.ByteString -> InfoHash BS.ByteString-> Tracker
+  where buildTracker :: PeerId BS.ByteString -> Announce BS.ByteString -> PieceLength Integer -> Pieces [BS.ByteString] -> InfoHash BS.ByteString-> Tracker
         buildTracker pid a pl p i = Tracker pid a pl p i singleFileInfo directoryInfo maybeEncoding
         validateTracker :: Tracker -> Maybe Tracker
         validateTracker t@(Tracker _ _ _ _ _ sfi dfi _)
@@ -80,8 +81,14 @@ toTracker peer_id (BDict d) = maybe (Left "ERROR: tracker invalid") Right $  bui
         maybeEncoding = Encoding <$> (M.lookup (BString "encoding") d >>= bencodeToMaybeString)
         maybePieceLength :: Maybe (PieceLength Integer)
         maybePieceLength = PieceLength <$> (l (BString "piece length") >>= bencodeToMaybeInteger)
-        maybePieces :: Maybe (Pieces BS.ByteString)
-        maybePieces = Pieces <$> (l (BString "pieces") >>= bencodeToMaybeString)
+        maybePieces :: Maybe (Pieces [BS.ByteString])
+
+        maybePieces = Pieces <$> unfoldr extractPieces <$> (l (BString "pieces") >>= bencodeToMaybeString)
+        extractPieces :: BS.ByteString -> Maybe (BS.ByteString, BS.ByteString)
+        extractPieces bs =
+          if BS.null bs
+          then Nothing
+          else Just (BS.take 20 bs, BS.drop 20 bs)
 toTracker _ _ = Left "ERROR: Tracker invalid due to absence of both single file dict and directory dict"
 
 createTrackerRequestPayload (Tracker (PeerId peer_id) (Announce url) _ _ (InfoHash info_hash) maybeSingleFileInfo maybeDirectoryInfo _) port =
@@ -122,16 +129,16 @@ handleTrackerRequest response =
                                    <*> Just (fmap Complete (M.lookup (BString "complete") d >>= bencodeToMaybeString))
                                    <*> Just (fmap InComplete (M.lookup (BString "incomplete") d >>= bencodeToMaybeString))
         (Just (BString s)) ->
-          print "got string from peers" >>
-          print s >>
+          --print "got string from peers" >>
+          --print s >>
           return Nothing
         other ->
-          print "ERROR: Got different value than expected from peers" >>
-          print other >>
+          --print "ERROR: Got different value than expected from peers" >>
+          --print other >>
           return Nothing
     decoded ->
-      print "ERROR: Didn't parse correctly" >>
-      print decoded >>
+      --print "ERROR: Didn't parse correctly" >>
+      --print decoded >>
       return Nothing
 
 -- Convenience Functions
@@ -159,3 +166,9 @@ dictToMaybeDirectoryFile (BDict x) = DirectoryFile <$> (Path <$> (M.lookup (BStr
                                                        (Length <$> (M.lookup (BString "length") x >>= bencodeToMaybeInteger)) <*>
                                                        Just (MD5Sum $  M.lookup (BString "md5sum") x >>= bencodeToMaybeString)
 dictToMaybeDirectoryFile _ = Nothing
+
+getTrackerPieces :: Tracker -> [BS.ByteString]
+getTrackerPieces (Tracker _ _ _ (Pieces bs) _ _ _  _) =  bs
+
+getTrackerPieceLength :: Tracker -> Integer
+getTrackerPieceLength (Tracker _ _ (PieceLength l) _ _ _ _  _) =  l

@@ -19,14 +19,14 @@ run filename host port = do
   case maybeTracker of
     Right tracker -> do
 -- TODO delete the host parameter
-      printf "tracker: %s" (show tracker)
+      --printf "tracker: %s" (show tracker)
       maybeTrackerResponse <- trackerRequest tracker host port
       case maybeTrackerResponse of
         Nothing -> do
-          print "got empty tracker response"
+          --print "got empty tracker response"
           return ()
         (Just t@(TrackerResponse (Peers peers) _ _ _ _ _ _)) -> do
-              printf "got to just tracker response %s" $ show t
+              --printf "got to just tracker response %s" $ show t
               print "spawning child threads for peers"
               mapM_ (\peer ->
                       forkFinally (Peer.startPeer tracker peer)

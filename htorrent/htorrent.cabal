@@ -21,6 +21,7 @@ library
                      , Tracker
                      , Utils
                      , Peer
+                     , TrackerPrint
   build-depends:       base >= 4.7 && < 5
                      , wreq
                      , aeson
