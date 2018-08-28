@@ -2,31 +2,43 @@
 module Peer where
 
 import qualified Tracker                   as T (InfoHash (..), Peer (..),
-                                                 PeerId (..), Tracker (..), getTrackerPieces)
+                                                 PeerId (..), Tracker (..),
+                                                 getTrackerPieces)
 import           Utils                     (unhex)
 
 import           Network.Socket            hiding (recv)
 import           Network.Socket.ByteString (recv, sendAll)
 
-import qualified Data.Word8                as W
 import qualified Data.Bits                 as Bits
+import qualified Data.Word8                as W
 
-import qualified Data.Either               as Either
 import qualified Data.ByteString           as BS
 import qualified Data.ByteString.UTF8      as UTF8
+import qualified Data.ByteString.Base16    as B16
+import qualified Data.Either               as Either
 
 import           Control.Monad             (unless)
-import           Data.Maybe                (fromJust, isNothing, listToMaybe)
+import           Data.List                 (find, foldl')
 import qualified Data.Map                  as M
+
+import           Data.Maybe                (fromJust, isNothing, listToMaybe)
+import qualified Data.Set as S
 
 
 newtype Conn e = Conn e deriving (Eq, Show)
 newtype InfoHash e = InfoHash e deriving (Eq, Show)
 newtype PeerId e = PeerId e deriving (Eq, Show)
 
+showPeerId :: BS.ByteString -> String
+showPeerId = UTF8.toString . B16.encode 
+
 data PeerResponse = PeerResponse (InfoHash BS.ByteString) (PeerId BS.ByteString) (Conn Socket) deriving (Eq, Show)
 
-type PieceMap = (M.Map BS.ByteString Bool)
+-- TODO: I found from trying to download arch that I was getting dupes of piece shas (not sure if I am doing something wrong, but this is to ensure I don't drop pieces b/c the shas are the same)
+newtype PieceMap = PieceMap [(BS.ByteString, Bool)] deriving Eq
+
+instance Show PieceMap where
+  show (PieceMap m) = "PieceMap len: " ++ (show $ length m)
 
 data PeerState = PeerState (PeerId BS.ByteString) (Conn Socket) (Maybe PieceMap) deriving (Eq, Show)
 
@@ -35,24 +47,32 @@ maybeUpdatePieceMap peerState@(PeerState _ _ (Just _)) _ = peerState
 maybeUpdatePieceMap (PeerState peer_id conn _) maybePieceMap = PeerState peer_id conn maybePieceMap
 
 -- TODO Got to figure out how to send a keep alive to every peer every 30 seconds w/o blocking the thread
-recvLoop :: T.Tracker -> PeerState -> IO ()
-recvLoop tracker peerState@(PeerState (PeerId peer_id) (Conn conn) _maybePieceMap) =  do
-  print $ "Blocked on recvLoop " ++ show peer_id
+recvLoop :: T.Tracker -> PeerState -> PeerRPCParse -> IO ()
+recvLoop tracker peerState@(PeerState (PeerId peer_id) (Conn conn) _maybePieceMap) peerRPCParse =  do
+  print $ "Blocked on recvLoop on peer_id:" ++ showPeerId peer_id
   msg <- recv conn 4096
-  let parsed = parseRPC tracker msg
-  let pieceMap = case parsed of
-        Right (BitField bitfield) ->
-          Just bitfield
-        _ ->
-          Nothing
 
-  mapM_ print $ Either.lefts [parsed]
+  let newPeerRPCParse@(PeerRPCParse word8Buffer maybeErrors xs) = parseRPC tracker msg peerRPCParse
+  print $ "getTrackerPieces length: " ++ (show $ length $ T.getTrackerPieces tracker) ++ " raw: "++ (show $ T.getTrackerPieces tracker)
+  let pieceMap = (\(BitField piecemap) -> piecemap) <$> find findBitField xs
+  putStrLn $ "RECVLOOP peerRPCParse" ++ show newPeerRPCParse
+
+  case maybeErrors of
+      Just error ->
+        print error
+      _ ->
+        return ()
+
   let maybeNewPeerState = maybeUpdatePieceMap peerState pieceMap
   unless (maybeNewPeerState == peerState) $
     print $ "peerStateUpdated to: " ++ (show maybeNewPeerState)
 
   unless (BS.null msg) $
-    recvLoop tracker maybeNewPeerState
+    recvLoop tracker maybeNewPeerState newPeerRPCParse
+
+findBitField :: PeerRPC -> Bool
+findBitField (BitField _) = True
+findBitField _            = False
 
 startPeer :: T.Tracker -> T.Peer -> IO ()
 startPeer tracker peer =  do
@@ -63,20 +83,19 @@ startPeer tracker peer =  do
     print $ "STARTPEER sending interested for: " ++ show peer
     msg <- sendInterested peerResponse
 
-    let parsed = parseRPC tracker msg
-    let pieceMap = case parsed of
-          Right (BitField bitfield) ->
-            Just bitfield
-          _ ->
-            Nothing
+    let peerRPCParse@(PeerRPCParse word8Buffer maybeErrors xs) = parseRPC tracker msg initialRPCParse
+    putStrLn $ "STARTPEER peerRPCParse" ++ show peerRPCParse
+    let pieceMap = (\(BitField piecemap) -> piecemap) <$> find findBitField xs
 
-    mapM_ print $ Either.lefts [parsed]
+    case maybeErrors of
+      Just error -> print error
+      _          -> return ()
 
     unless (isNothing pieceMap) $
-      print $ BS.concat ["STARTPEER pieceMap parsed successfuly for peer ", peer_id]
+      print $ BS.concat ["STARTPEER pieceMap parsed successfuly for peer ", B16.encode peer_id]
 
     let peerState = PeerState (PeerId peer_id) (Conn conn) pieceMap
-    recvLoop tracker peerState
+    recvLoop tracker peerState peerRPCParse
 
 -- I can start parsing the bitfield so I can start trying to leach data
 
@@ -85,37 +104,58 @@ startPeer tracker peer =  do
 -- B/c you might not yet have all the data you need and multiple messages can be received in a given receive block
 -- there are also situations where you might want to drop the connection if the parsing rules are violated
 -- Right now this makes the assumption that we are only ever getting a single RPC in a given recv call (which is not true)
-parseRPC :: T.Tracker -> BS.ByteString -> Either BS.ByteString  PeerRPC
-parseRPC tracker = (parseRPC' tracker) . BS.unpack
+data PeerRPCParse = PeerRPCParse [W.Word8] (Maybe BS.ByteString) [PeerRPC] deriving (Eq, Show)
 
-parseRPC' tracker unpackedMsg
-  | unpackedMsg == [0,0,0,0] = Right PeerKeepAlive
-  | unpackedMsg == [0,0,0,1,0] = Right Choke
-  | unpackedMsg == [0,0,0,1,1] = Right UnChoke
-  | unpackedMsg == [0,0,0,1,2] = Right Interested
-  | unpackedMsg == [0,0,0,1,3] = Right NotInterested
-  | take 5 unpackedMsg == [0,0,0,5,4] = Right $ Have $ BS.pack $ take 4 $ drop 5 unpackedMsg
-  | take 3 unpackedMsg == [0,0,0] &&
-    (drop 4 (take 5 unpackedMsg) == [5])  = if ((unpackedMsg !! 3) - 1) == fromIntegral (length $ drop 5 unpackedMsg) then do
-                                            let word8s = (drop 5 unpackedMsg)
+initialRPCParse :: PeerRPCParse
+initialRPCParse = (PeerRPCParse [] Nothing [])
+
+parseRPC :: T.Tracker -> BS.ByteString -> PeerRPCParse -> PeerRPCParse
+parseRPC tracker bs peerRPCParse = foldl' (parseRPC' tracker) peerRPCParse $ BS.unpack bs
+
+parseRPC' tracker acc@(PeerRPCParse word8Buffer Nothing xs) word8
+  | newBuffer == [0,0,0,0] = PeerRPCParse [] Nothing (PeerKeepAlive : xs)
+  | newBuffer == [0,0,0,1,0] = PeerRPCParse [] Nothing (Choke : xs)
+  | newBuffer == [0,0,0,1,1] = PeerRPCParse [] Nothing (UnChoke : xs)
+  | newBuffer == [0,0,0,1,2] = PeerRPCParse [] Nothing (Interested : xs)
+  | newBuffer == [0,0,0,1,3] = PeerRPCParse [] Nothing ( NotInterested : xs)
+  | (take 5 newBuffer) == [0,0,0,5,4] =
+    if length newBuffer == 9 then
+      PeerRPCParse [] Nothing ((Have $ BS.pack $ take 4 $ drop 5 newBuffer) : xs)  --NOTE: I think that this maybe should be (Have $ BS.pack $ take 1 $ drop 5 unpackedMsg)
+    else
+      PeerRPCParse newBuffer Nothing xs  --NOTE: I think that this maybe should be (Have $ BS.pack $ take 1 $ drop 5 unpackedMsg)
+  | take 3 newBuffer == [0,0,0] &&
+    (drop 4 (take 5 newBuffer) == [5])  = do--if  == fromIntegral (length $ drop 5 unpackedMsg) then do
+                                            let bitfieldLength =  fromIntegral ((newBuffer !! 3) - 1)
+                                            let word8s = (drop 5 newBuffer)
                                             let boolsBeforeCheck = word8s >>= (\ x -> reverse [Bits.testBit x i | i <- [0 .. 7]])
-                                            let extraBits = drop (length $ T.getTrackerPieces tracker) boolsBeforeCheck
-                                            if  length boolsBeforeCheck  <  length (T.getTrackerPieces tracker)  then
-                                              Left "ERROR parseRPC in BitField parse, too few bytes sent in bitfield"
-                                             else
-                                              if  or extraBits then
-                                                Left "ERROR parseRPC in BitField parse, extra bits were set"
-                                              else
-                                                Right $ BitField $ M.fromList $ zip (T.getTrackerPieces tracker) (take (length $ T.getTrackerPieces tracker) boolsBeforeCheck) 
-                                          else
-                                            Left $ BS.concat ["ERROR parseRPC in BitField parse, length does not match bitfield length: ", BS.pack unpackedMsg]
-  | take 5 unpackedMsg == [0,0,1,3,6] = if length unpackedMsg == 8 then
-                                          Right $ Request (fromIntegral $ unpackedMsg !! 5)
-                                                          (fromIntegral $ unpackedMsg !! 6)
-                                                          (fromIntegral $ unpackedMsg !! 7)
+
+                                            if (ceiling ((fromIntegral . length $ T.getTrackerPieces tracker) / 8)) /= bitfieldLength then
+                                              PeerRPCParse newBuffer (Just "ERROR parseRPC in BitField parse, (ceiling ((fromIntegral . length $ T.getTrackerPieces tracker) / 8)) /= bitfieldLength") xs
+                                            else do
+                                              --if (S.size (S.fromList (T.getTrackerPieces tracker)) /= (length (T.getTrackerPieces tracker))) then
+                                               -- PeerRPCParse newBuffer (Just "ERROR parseRPC in BitField parse, (S.size (S.fromList (T.getTrackerPieces tracker)) /= (length (T.getTrackerPieces tracker)))") xs
+                                              --else do
+                                              -- If the number of bools are lower than the number of pieces then we don't have enough data to proceed
+                                              let zipL = zip (T.getTrackerPieces tracker) boolsBeforeCheck
+                                              if length zipL == length (T.getTrackerPieces tracker) then do
+                                                let extraBits = drop (length $ T.getTrackerPieces tracker) boolsBeforeCheck
+
+                                                -- If we have any extra bits we should  drop the connection
+                                                if or extraBits then
+                                                  PeerRPCParse newBuffer (Just "ERROR parseRPC in BitField parse, extra bits are set") xs
+                                                else
+                                                  PeerRPCParse [] Nothing ((BitField $ PieceMap $ zipL):xs)
+                                                else
+                                                  PeerRPCParse newBuffer Nothing xs
+  | take 5 newBuffer == [0,0,1,3,6] = if length newBuffer == 8 then
+                                          PeerRPCParse [] Nothing (Request (fromIntegral $ newBuffer !! 5) (fromIntegral $ newBuffer !! 6) (fromIntegral $ newBuffer !! 7):xs)
                                         else
-                                          Left $ BS.concat ["ERROR parseRPC in Request parse, expected length 8, but message is length ", UTF8.fromString $ show $ length unpackedMsg]
-  | otherwise = Left $ BS.concat ["ERROR parseRPC in unmatched parse ", BS.pack unpackedMsg]
+                                          PeerRPCParse newBuffer Nothing xs
+  | otherwise = PeerRPCParse newBuffer Nothing xs
+  where newBuffer = word8Buffer ++ [word8]
+parseRPC' tracker (PeerRPCParse word8Buffer error xs) word8 = PeerRPCParse newBuffer error xs
+  where newBuffer = word8Buffer ++ [word8]
+
 
 data PeerRPC = PeerKeepAlive
              | Choke
