@@ -53,7 +53,7 @@ recvLoop tracker peerState@(PeerState (PeerId peer_id) (Conn conn) _maybePieceMa
   msg <- recv conn 4096
 
   let newPeerRPCParse@(PeerRPCParse word8Buffer maybeErrors xs) = parseRPC tracker msg peerRPCParse
-  print $ "getTrackerPieces length: " ++ (show $ length $ T.getTrackerPieces tracker) ++ " raw: "++ (show $ T.getTrackerPieces tracker)
+  --print $ "getTrackerPieces length: " ++ (show $ length $ T.getTrackerPieces tracker) ++ " raw: "++ (show $ T.getTrackerPieces tracker)
   let pieceMap = (\(BitField piecemap) -> piecemap) <$> find findBitField xs
   putStrLn $ "RECVLOOP peerRPCParse" ++ show newPeerRPCParse
 
@@ -110,23 +110,24 @@ initialRPCParse :: PeerRPCParse
 initialRPCParse = (PeerRPCParse [] Nothing [])
 
 parseRPC :: T.Tracker -> BS.ByteString -> PeerRPCParse -> PeerRPCParse
-parseRPC tracker bs peerRPCParse = foldl' (parseRPC' tracker) peerRPCParse $ BS.unpack bs
+parseRPC tracker bs peerRPCParse = do
+  foldl' (parseRPC' tracker) peerRPCParse $ BS.unpack bs
 
 parseRPC' tracker acc@(PeerRPCParse word8Buffer Nothing xs) word8
-  | newBuffer == [0,0,0,0] = PeerRPCParse [] Nothing (PeerKeepAlive : xs)
-  | newBuffer == [0,0,0,1,0] = PeerRPCParse [] Nothing (Choke : xs)
-  | newBuffer == [0,0,0,1,1] = PeerRPCParse [] Nothing (UnChoke : xs)
-  | newBuffer == [0,0,0,1,2] = PeerRPCParse [] Nothing (Interested : xs)
-  | newBuffer == [0,0,0,1,3] = PeerRPCParse [] Nothing ( NotInterested : xs)
+  | newBuffer == [0,0,0,0] = PeerRPCParse [] Nothing (xs ++ [PeerKeepAlive])
+  | newBuffer == [0,0,0,1,0] = PeerRPCParse [] Nothing (xs ++ [Choke])
+  | newBuffer == [0,0,0,1,1] = PeerRPCParse [] Nothing (xs ++ [UnChoke])
+  | newBuffer == [0,0,0,1,2] = PeerRPCParse [] Nothing (xs ++ [Interested])
+  | newBuffer == [0,0,0,1,3] = PeerRPCParse [] Nothing (xs ++ [NotInterested])
   | (take 5 newBuffer) == [0,0,0,5,4] =
     if length newBuffer == 9 then
-      PeerRPCParse [] Nothing ((Have $ BS.pack $ take 4 $ drop 5 newBuffer) : xs)  --NOTE: I think that this maybe should be (Have $ BS.pack $ take 1 $ drop 5 unpackedMsg)
+      PeerRPCParse (drop 9 newBuffer) Nothing (xs ++ [Have $ BS.pack $ take 4 $ drop 5 newBuffer])  --NOTE: I think that this maybe should be (Have $ BS.pack $ take 1 $ drop 5 unpackedMsg)
     else
       PeerRPCParse newBuffer Nothing xs  --NOTE: I think that this maybe should be (Have $ BS.pack $ take 1 $ drop 5 unpackedMsg)
   | take 3 newBuffer == [0,0,0] &&
     (drop 4 (take 5 newBuffer) == [5])  = do--if  == fromIntegral (length $ drop 5 unpackedMsg) then do
                                             let bitfieldLength =  fromIntegral ((newBuffer !! 3) - 1)
-                                            let word8s = (drop 5 newBuffer)
+                                            let word8s = take bitfieldLength (drop 5 newBuffer)
                                             let boolsBeforeCheck = word8s >>= (\ x -> reverse [Bits.testBit x i | i <- [0 .. 7]])
 
                                             if (ceiling ((fromIntegral . length $ T.getTrackerPieces tracker) / 8)) /= bitfieldLength then
@@ -136,19 +137,18 @@ parseRPC' tracker acc@(PeerRPCParse word8Buffer Nothing xs) word8
                                                -- PeerRPCParse newBuffer (Just "ERROR parseRPC in BitField parse, (S.size (S.fromList (T.getTrackerPieces tracker)) /= (length (T.getTrackerPieces tracker)))") xs
                                               --else do
                                               -- If the number of bools are lower than the number of pieces then we don't have enough data to proceed
-                                              let zipL = zip (T.getTrackerPieces tracker) boolsBeforeCheck
-                                              if length zipL == length (T.getTrackerPieces tracker) then do
+                                              if length word8s /= bitfieldLength then do
+                                                PeerRPCParse newBuffer Nothing xs
+                                              else do
                                                 let extraBits = drop (length $ T.getTrackerPieces tracker) boolsBeforeCheck
 
                                                 -- If we have any extra bits we should  drop the connection
                                                 if or extraBits then
                                                   PeerRPCParse newBuffer (Just "ERROR parseRPC in BitField parse, extra bits are set") xs
                                                 else
-                                                  PeerRPCParse [] Nothing ((BitField $ PieceMap $ zipL):xs)
-                                                else
-                                                  PeerRPCParse newBuffer Nothing xs
+                                                  PeerRPCParse [] Nothing (xs ++ [BitField $ PieceMap $ zip (T.getTrackerPieces tracker) boolsBeforeCheck])
   | take 5 newBuffer == [0,0,1,3,6] = if length newBuffer == 8 then
-                                          PeerRPCParse [] Nothing (Request (fromIntegral $ newBuffer !! 5) (fromIntegral $ newBuffer !! 6) (fromIntegral $ newBuffer !! 7):xs)
+                                          PeerRPCParse [] Nothing (xs ++ [Request (fromIntegral $ newBuffer !! 5) (fromIntegral $ newBuffer !! 6) (fromIntegral $ newBuffer !! 7)])
                                         else
                                           PeerRPCParse newBuffer Nothing xs
   | otherwise = PeerRPCParse newBuffer Nothing xs

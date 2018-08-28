@@ -1,8 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Tracker where
 
+import Control.Monad (when)
 import Data.List (unfoldr)
 import Data.Maybe (fromJust, isNothing, isJust)
+import Data.Either (isRight)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.Map as M
@@ -15,8 +17,9 @@ import BEncode ( BEncode (..)
                , bencodeToMaybeInteger
                , decode
                , encode
+               , maybeReadBencode
                )
-import Utils (escape, shaHash)
+import Utils (escape, shaHash, getPeerID)
 
 newtype Announce e = Announce e deriving (Eq, Show)
 newtype Name e = Name e deriving (Eq, Show)
@@ -172,3 +175,16 @@ getTrackerPieces (Tracker _ _ _ (Pieces bs) _ _ _  _) =  bs
 
 getTrackerPieceLength :: Tracker -> Integer
 getTrackerPieceLength (Tracker _ _ (PieceLength l) _ _ _ _  _) =  l
+
+testTracker = do
+  peer_id <- getPeerID
+  maybeBencode <- maybeReadBencode "example4.torrent"
+  case maybeBencode of
+    Right r ->
+      case toTracker peer_id r of
+        Right tracker ->
+          return $ Just  tracker
+        Left e2 ->
+          return Nothing
+    Left e ->
+        return Nothing
