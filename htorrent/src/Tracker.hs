@@ -49,24 +49,32 @@ type Port = Integer
 -- TODO: You will need to implement a Maybe PeerId here as it is possible for that to be provided. If it is, then you need to verify that the peer id you get back from the handshake is the same as what the tracker said.
 data Peer = Peer IP Port deriving (Eq, Show)
 
-data Tracker = Tracker (PeerId BS.ByteString) (Announce BS.ByteString) (PieceLength Integer) (Pieces [BS.ByteString]) (InfoHash BS.ByteString) (Maybe SingleFileInfo) (Maybe DirectoryInfo) (Maybe (Encoding BS.ByteString)) deriving (Eq, Show)
+data Tracker = Tracker (PeerId BS.ByteString) (Announce BS.ByteString) (PieceLength Integer) (Pieces [BS.ByteString]) (InfoHash BS.ByteString) (SingleFileInfo) (Maybe DirectoryInfo) (Maybe (Encoding BS.ByteString)) deriving (Eq, Show)
 
-data TrackerResponse = TrackerResponse (Peers [Peer]) 
-                                       (Maybe (TrackerId BS.ByteString)) 
+data TrackerResponse = TrackerResponse (Peers [Peer])
+                                       (Maybe (TrackerId BS.ByteString))
                                        (Maybe (Warning BS.ByteString))
                                        (Interval Integer)
                                        (Maybe (MinInterval Integer))
                                        (Maybe (Complete BS.ByteString))
                                        (Maybe (InComplete BS.ByteString)) deriving (Eq, Show)
 
+-- TODO: Currently I am only dealing with single file info. I will add support for multi file info later.
 toTracker :: BS.ByteString -> BEncode -> Either BS.ByteString Tracker
-toTracker peer_id (BDict d) = maybe (Left "ERROR: tracker invalid") Right $  buildTracker <$> (Just $ PeerId peer_id) <*> maybeAnnounce <*> maybePieceLength <*> maybePieces <*> maybeInfoHash >>= validateTracker
-  where buildTracker :: PeerId BS.ByteString -> Announce BS.ByteString -> PieceLength Integer -> Pieces [BS.ByteString] -> InfoHash BS.ByteString-> Tracker
-        buildTracker pid a pl p i = Tracker pid a pl p i singleFileInfo directoryInfo maybeEncoding
-        validateTracker :: Tracker -> Maybe Tracker
-        validateTracker t@(Tracker _ _ _ _ _ sfi dfi _)
-          | isNothing sfi && isNothing dfi = Nothing
-          | otherwise = Just t
+toTracker peer_id (BDict d) =
+  maybe (Left "ERROR: tracker invalid") Right $ buildTracker <$> (Just $ PeerId peer_id)
+                                                             <*> maybeAnnounce
+                                                             <*> maybePieceLength
+                                                             <*> maybePieces
+                                                             <*> maybeInfoHash
+                                                             <*> singleFileInfo
+                                                             -- >>= validateTracker
+  where buildTracker :: PeerId BS.ByteString -> Announce BS.ByteString -> PieceLength Integer -> Pieces [BS.ByteString] -> InfoHash BS.ByteString -> SingleFileInfo -> Tracker
+        buildTracker pid a pl p i sfi = Tracker pid a pl p i sfi directoryInfo maybeEncoding
+        -- validateTracker :: Tracker -> Maybe Tracker
+        -- validateTracker t@(Tracker _ _ _ _ _ sfi dfi _)
+        --   | isNothing sfi && isNothing dfi = Nothing
+        --   | otherwise = Just t
         l :: BEncode -> Maybe BEncode
         l x = M.lookup (BString "info") d >>= bencodeToMaybeDict >>= M.lookup x
         maybeInfoHash :: Maybe (InfoHash BS.ByteString)
@@ -74,7 +82,7 @@ toTracker peer_id (BDict d) = maybe (Left "ERROR: tracker invalid") Right $  bui
         maybeAnnounce :: Maybe (Announce BS.ByteString)
         maybeAnnounce =  Announce <$> (M.lookup (BString "announce") d >>= bencodeToMaybeString)
         singleFileInfo :: Maybe SingleFileInfo
-        singleFileInfo = SingleFileInfo <$> (Name <$> (l (BString "name") >>= bencodeToMaybeString)) 
+        singleFileInfo = SingleFileInfo <$> (Name <$> (l (BString "name") >>= bencodeToMaybeString))
                                         <*> (Length <$> (l (BString "length") >>= bencodeToMaybeInteger))
                                         <*> Just (MD5Sum (l (BString "md5sum") >>= bencodeToMaybeString))
         directoryInfo :: Maybe DirectoryInfo
@@ -94,14 +102,15 @@ toTracker peer_id (BDict d) = maybe (Left "ERROR: tracker invalid") Right $  bui
           else Just (BS.take 20 bs, BS.drop 20 bs)
 toTracker _ _ = Left "ERROR: Tracker invalid due to absence of both single file dict and directory dict"
 
-createTrackerRequestPayload (Tracker (PeerId peer_id) (Announce url) _ _ (InfoHash info_hash) maybeSingleFileInfo maybeDirectoryInfo _) port =
+createTrackerRequestPayload (Tracker (PeerId peer_id) (Announce url) _ _ (InfoHash info_hash) singleFileInfo maybeDirectoryInfo _) port =
   requestString
-  where left = if isJust maybeSingleFileInfo
-              then  getSingleFileLength $ fromJust maybeSingleFileInfo
-              else sum $ fmap getDirectoryFileLength $ getDirectoryInfoFiles $ fromJust maybeDirectoryInfo
+  where
+    -- left = if isJust maybeSingleFileInfo
+    --           then  getSingleFileLength $ fromJust maybeSingleFileInfo
+    --           else sum $ fmap getDirectoryFileLength $ getDirectoryInfoFiles $ fromJust maybeDirectoryInfo
         requestString = UTF8.toString $ BS.concat [ url
                                                   , "?peer_id=", peer_id
-                                                  , "&left=", UTF8.fromString $ show left
+                                                  , "&left=", UTF8.fromString $ show singleFileInfo
                                                   , "&event=started"
                                                   , BS.concat [ "port=", UTF8.fromString $ show port]
                                                   , "&uploaded=0"
@@ -111,8 +120,8 @@ createTrackerRequestPayload (Tracker (PeerId peer_id) (Announce url) _ _ (InfoHa
                                                   ]
 
 -- TODO delete the host parameter
-trackerRequest :: Tracker -> BS.ByteString -> Integer -> IO (Maybe TrackerResponse)
-trackerRequest tracker _host port =
+trackerRequest :: Tracker -> Integer -> IO (Maybe TrackerResponse)
+trackerRequest tracker port =
   HTTP.parseRequest (createTrackerRequestPayload tracker port) >>=
   HTTP.httpBS >>=
   handleTrackerRequest
@@ -176,6 +185,10 @@ getTrackerPieces (Tracker _ _ _ (Pieces bs) _ _ _  _) =  bs
 getTrackerPieceLength :: Tracker -> Integer
 getTrackerPieceLength (Tracker _ _ (PieceLength l) _ _ _ _  _) =  l
 
+getTrackerSingleFileInfo :: Tracker -> SingleFileInfo
+getTrackerSingleFileInfo (Tracker _ _ _ _ _ singleFileInfo _ _ ) = singleFileInfo
+
+testTracker :: IO (Maybe Tracker)
 testTracker = do
   peer_id <- getPeerID
   maybeBencode <- maybeReadBencode "example4.torrent"

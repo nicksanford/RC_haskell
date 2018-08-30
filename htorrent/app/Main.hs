@@ -18,5 +18,5 @@ port = 6882
 main :: IO ()
 main = do
   args <- SE.getArgs
-  _ <- forkIO $ Lib.run  (head args) host port
+  _ <- forkIO $ Lib.run  (head args) port
   Server.run (show port)
