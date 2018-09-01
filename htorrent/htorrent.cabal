@@ -42,6 +42,7 @@ library
                      , binary
                      , network-simple
                      , network
+                     , time
   default-language:    Haskell2010
 
 executable htorrent

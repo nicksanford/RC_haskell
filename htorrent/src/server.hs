@@ -28,11 +28,11 @@ run port =  do
           return sock
         loop sock = forever $ do
           (conn, peer) <- accept sock
-          putStrLn $ "Connection " ++ (show conn) ++ " from " ++ (show peer)
+          putStrLn $ "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAa " ++ (show conn) ++ " from " ++ (show peer)
           void $ forkFinally (talk conn peer) (\_ -> print ("closing " ++ (show conn) ++ "  from " ++ (show peer)) >> close conn)
         talk conn peer = do
           print $ "about to read " ++ (show conn) ++ "  from " ++ (show peer)
           msg <- recv conn 4096
-          print $ BS.concat ["SERVER READ ", msg, " on ", (UTF8.fromString $ show conn), "  from ", (UTF8.fromString $ show peer)]
+          print $ BS.concat ["OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO  SERVER READ ", msg, " on ", (UTF8.fromString $ show conn), "  from ", (UTF8.fromString $ show peer)]
           unless (BS.null msg) $ do
             talk conn peer

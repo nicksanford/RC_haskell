@@ -31,6 +31,6 @@ run filename port = do
           mapM_ (\peer ->
                   forkFinally (Peer.start tracker peer workChan responseChan)
                               (\x -> print $ "FORK FINALLY HIT ERROR ON START PEER: " ++ show peer ++ " " ++ show x)
-                  ) peers
+                  ) $ take 3 peers
     Left e ->
       print e

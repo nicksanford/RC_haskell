@@ -1,8 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 module FileManager where
 import Tracker
+import Utils (shaHash)
+import qualified System.IO as SIO
 import qualified Control.Concurrent.Chan as Chan
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.List as L
 
 -- data Tracker = Tracker (PeerId BS.ByteString)
@@ -29,6 +32,7 @@ import qualified Data.List as L
 --                                          (DownloadedPieces (M.Map BS.ByteString (M.Map )))
 
 blockSize :: Integer
+--blockSize = 2^14 -- 16k
 blockSize = 2^14 -- 16k
 -- TODO: I am going to start off with only implementing this for a single file, in multifile mode I will need to maintain multiple files on the filesystem, I will deal with that once I have gotten single file downloads & uploads working.
 
@@ -36,6 +40,7 @@ newtype PieceIndex a = PieceIndex a deriving (Eq, Show, Ord)
 newtype Begin a = Begin a deriving (Eq, Show, Ord)
 newtype RequestLength a = RequestLength a deriving (Eq, Show, Ord)
 newtype PieceContent a = PieceContent a deriving (Eq, Show, Ord)
+newtype PieceSha a = PieceSha a deriving (Eq, Show, Ord)
 
 data BlockRequest = BlockRequest (PieceIndex Integer) (Begin Integer) (RequestLength Integer) deriving (Eq, Show, Ord)
 
@@ -69,11 +74,21 @@ responseToMaybeRequest _ = Nothing
 loop tracker trackerResponse workChan responseChan = do
   response <- Chan.readChan responseChan
   print $ "RESPONSE CHANNEL: " ++ (show response)
+
+  case response of
+    (Succeeded (PieceResponse _ (PieceContent c))) -> do
+      let hash = shaHash c
+      BS.writeFile (UTF8.toString hash) c
+      print $ "WROTE " ++ (UTF8.toString hash)
+    _ ->
+      return ()
+
   case responseToMaybeRequest response of
     (Just work) ->
       Chan.writeChan workChan work
     _ ->
       return ()
+
   loop tracker trackerResponse workChan responseChan
 
 start :: Tracker.Tracker -> Tracker.TrackerResponse -> Chan.Chan WorkMessage -> Chan.Chan ResponseMessage -> IO ()

@@ -45,7 +45,7 @@ shaHash :: BS.ByteString -> BS.ByteString
 shaHash = BS.pack . BS.unpack . (BA.convert . (BAE.convertToBase BAE.Base16 :: C.Digest C.SHA1 -> BS.ByteString) .  (C.hashWith C.SHA1 :: BS.ByteString -> C.Digest C.SHA1))
 
 shaHashRaw :: BS.ByteString -> BS.ByteString
-shaHashRaw = BS.pack . BS.unpack . (BA.convert . (BAE.convertToBase BAE.Base16 :: C.Digest C.SHA1 -> BS.ByteString) .  (C.hashWith C.SHA1 :: BS.ByteString -> C.Digest C.SHA1))
+shaHashRaw = BS.pack . BS.unpack . (BA.convert .  (C.hashWith C.SHA1 :: BS.ByteString -> C.Digest C.SHA1))
 
 unescape :: BS.ByteString -> BS.ByteString
 unescape x = case fmap (\(a,b) -> (BS.singleton a, b)) (BS.uncons x) of
