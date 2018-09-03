@@ -24,23 +24,17 @@ library
                      , TrackerPrint
                      , FileManager
   build-depends:       base >= 4.7 && < 5
-                     , wreq
-                     , aeson
-                     , lens
                      , containers
                      , bytestring
                      , cryptonite
                      , text
                      , memory
                      , utf8-string
-                     , network-uri
-                     , byteable
                      , base16-bytestring
                      , random
                      , http-conduit
                      , word8
                      , binary
-                     , network-simple
                      , network
                      , time
   default-language:    Haskell2010
