@@ -190,15 +190,49 @@ cantDoWork :: PeerState -> Bool
 cantDoWork peerState@(PeerState _ _ pieceMap _  _ _ _ _) =
   peerChoking peerState || piecesThatCanBeDone pieceMap == []
 
+-- TODO: Create a property test to verify that for any block, completed, working, and worked states are mutually exclusive.
+-- TODO: Maybe I should create a type to model block state
+-- data BlockState = Unstarted | Working (TimeStamp, Count) | Complete BS.ByteString
+filterCompletedBlocks :: Block -> Bool
+filterCompletedBlocks (Block _ _ _ _ _ (Just _)) = True
+filterCompletedBlocks _ = False
+
+filterWorkingBlocks :: Block -> Bool
+filterWorkingBlocks (Block _ _ _ (SentTimestamp (Just _)) _ Nothing) = True
+filterWorkingBlocks _ = False
+
+filterUnworkedBlocks :: Block -> Bool
+filterUnworkedBlocks (Block _ _ _ (SentTimestamp Nothing) _ Nothing) = True
+filterUnworkedBlocks _ = False
+
 sendRequests :: PeerState -> IO PeerState
 sendRequests (PeerState a (Conn conn) b c d (Just work) e g) = do
   currentTime <- Clock.getCurrentTime
-  newWork <- traverse (f currentTime) work
-  return $ PeerState a (Conn conn) b c d (Just newWork) e g
+  let completedRequests = filter filterCompletedBlocks work
+  let workingRequests = filter filterWorkingBlocks work
+  let unworkedRequests = filter filterUnworkedBlocks work
+  let newRequestsToWork = take (1 - (length workingRequests)) unworkedRequests
+  let unworkedRequestsMinusNewRequestsToWork = drop (1 - (length workingRequests)) unworkedRequests
+  newWork <- traverse (f currentTime) newRequestsToWork
+  let nextWork = sortOn (\(Block _ (Begin begin) _ _ _ _ ) -> begin) (newWork ++
+                                                                      unworkedRequestsMinusNewRequestsToWork ++
+                                                                      workingRequests ++
+                                                                      completedRequests)
+  print $ show a ++
+          " work: " ++ (show $ length work) ++
+          " completedRequests: " ++ (show $ length completedRequests) ++ " " ++ (show completedRequests) ++
+          " workingRequests: " ++ (show $ length workingRequests) ++ " " ++ (show workingRequests) ++
+          " unworkedRequests: " ++ (show $ length unworkedRequests) ++
+          " newRequestsToWork: " ++ (show $ length newRequestsToWork) ++ " " ++ (show newRequestsToWork) ++
+          " unworkedRequestsMinusNewRequestsToWork: " ++ (show $ length unworkedRequestsMinusNewRequestsToWork) ++
+          " nextWork: " ++ (show $ length nextWork) ++
+          " currentHash: " ++ (UTF8.toString $ shaHashRaw $ BS.concat (fmap (\(Block _ _ _ _ _ (Just (Payload payload))) -> payload) completedRequests))
+  return $ PeerState a (Conn conn) b c d (Just nextWork) e g
   -- TODO: Currently we are not going to factor in time but this allows us to add it later if we would like to
   where
         f :: Clock.UTCTime -> Block -> IO Block
-        f currentTime (Block (Index pieceIndex) (Begin begin) (Length len) (SentTimestamp _t) (SentCount count) Nothing) = do
+        f currentTime (Block (Index pieceIndex) (Begin begin) (Length len) (SentTimestamp Nothing) (SentCount count) Nothing) = do
+            print $ "SENDING: " ++ (show $ (Block (Index pieceIndex) (Begin begin) (Length len) (SentTimestamp Nothing) (SentCount count) Nothing))
             sendAll conn $ request pieceIndex begin len
             return $ Block (Index pieceIndex) (Begin begin) (Length len) (SentTimestamp $ Just currentTime) (SentCount (count + 1)) Nothing
         f _ x = return x
@@ -209,7 +243,8 @@ recvLoop :: T.Tracker -> PeerState -> IO ()
 --recvLoop tracker peerState@(PeerState (PeerId peer_id) (Conn conn) pieceMap) peerRPCParse workChan responseChan currentWork = do
 recvLoop tracker peerState@(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse peerRPCParse) _ _ _)  = do
   -- TODO If anything throws, catch it, put the work back in the response queue for the parent thread
-  print $ "Blocked on recvLoop on peer_id:" ++ showPeerId peer_id
+  currentTime <- Clock.getCurrentTime
+  print $ "Blocked on recvLoop on peer_id: " ++ showPeerId peer_id ++ "at: " ++ (show currentTime)
   -- TODO If this is null but you still have checked out work, put the work back, I'm pretty sure I only need to do this on recv calls
   sendAll conn keepAlive
   msg <- recv conn 4096
@@ -492,6 +527,7 @@ sendHandshake (T.Peer ip port) bs = do
   -- exactly how many bytes I need to read in for the handshake response.
   -- 49 + (length "BitTorrent protocol") == 58
   msg <- recv sock 68
+  getSocketOption sock RecvTimeOut >>= (\x -> print $ "RecvTimeOut : " ++ (show x))
   return (msg, sock)
 
   where hints = defaultHints { addrSocketType = Stream }

@@ -50,7 +50,8 @@ data WorkMessage = Work [BlockRequest] deriving (Eq, Show)
 
 data ResponseMessage = Failed [BlockRequest]
                      | Succeeded PieceResponse
-                     deriving (Eq, Show, Ord)
+                     | Error Peer
+                     deriving (Eq, Show)
 
 getRequestList :: Tracker -> [BlockRequest]
 getRequestList tracker = do
@@ -71,17 +72,23 @@ responseToMaybeRequest :: ResponseMessage -> Maybe WorkMessage
 responseToMaybeRequest (Failed xs) = Just (Work xs)
 responseToMaybeRequest _ = Nothing
 
-loop tracker trackerResponse workChan responseChan = do
+loop tracker trackerResponse workChan responseChan peers = do
+  print $ "RESPONSE CHANNEL: number of active peers: " ++ (show $ length peers)
   response <- Chan.readChan responseChan
   print $ "RESPONSE CHANNEL: " ++ (show response)
 
-  case response of
+  newPeers <- case response of
     (Succeeded (PieceResponse _ (PieceContent c))) -> do
       let hash = shaHash c
       BS.writeFile (UTF8.toString hash) c
       print $ "WROTE " ++ (UTF8.toString hash)
+      return peers
+    (Error p) -> do
+      let n = filter (/=p) peers
+      print $ "RESPONSE CHANNEL: Peer " ++ show p ++ " is no longer running. new peer list: " ++ show n
+      return n
     _ ->
-      return ()
+      return peers
 
   case responseToMaybeRequest response of
     (Just work) ->
@@ -89,13 +96,13 @@ loop tracker trackerResponse workChan responseChan = do
     _ ->
       return ()
 
-  loop tracker trackerResponse workChan responseChan
+  loop tracker trackerResponse workChan responseChan newPeers
 
-start :: Tracker.Tracker -> Tracker.TrackerResponse -> Chan.Chan WorkMessage -> Chan.Chan ResponseMessage -> IO ()
-start tracker trackerResponse workChan responseChan = do
+start :: Tracker.Tracker -> Tracker.TrackerResponse -> Chan.Chan WorkMessage -> Chan.Chan ResponseMessage -> [Peer] -> IO ()
+start tracker trackerResponse workChan responseChan peers = do
   let pieceList :: [WorkMessage]
-      pieceList = Work <$> (L.groupBy (\(BlockRequest (PieceIndex x) _ _ ) (BlockRequest (PieceIndex y) _ _ ) -> x == y) $ getRequestList tracker)
+      pieceList = Work <$> reverse <$> (L.groupBy (\(BlockRequest (PieceIndex x) _ _ ) (BlockRequest (PieceIndex y) _ _ ) -> x == y) $ getRequestList tracker)
 
   --putStrLn $ "ADDING WORK TO CHANNEL: " ++ (show pieceList)
   Chan.writeList2Chan workChan pieceList
-  loop tracker trackerResponse workChan responseChan
+  loop tracker trackerResponse workChan responseChan peers
