@@ -101,7 +101,7 @@ loop tracker trackerResponse workChan responseChan peers = do
 start :: Tracker.Tracker -> Tracker.TrackerResponse -> Chan.Chan WorkMessage -> Chan.Chan ResponseMessage -> [Peer] -> IO ()
 start tracker trackerResponse workChan responseChan peers = do
   let pieceList :: [WorkMessage]
-      pieceList = Work <$> reverse <$> (L.groupBy (\(BlockRequest (PieceIndex x) _ _ ) (BlockRequest (PieceIndex y) _ _ ) -> x == y) $ getRequestList tracker)
+      pieceList = Work <$> (L.groupBy (\(BlockRequest (PieceIndex x) _ _ ) (BlockRequest (PieceIndex y) _ _ ) -> x == y) $ getRequestList tracker)
 
   --putStrLn $ "ADDING WORK TO CHANNEL: " ++ (show pieceList)
   Chan.writeList2Chan workChan pieceList

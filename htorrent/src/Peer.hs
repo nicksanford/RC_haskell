@@ -211,8 +211,8 @@ sendRequests (PeerState a (Conn conn) b c d (Just work) e g) = do
   let completedRequests = filter filterCompletedBlocks work
   let workingRequests = filter filterWorkingBlocks work
   let unworkedRequests = filter filterUnworkedBlocks work
-  let newRequestsToWork = take (1 - (length workingRequests)) unworkedRequests
-  let unworkedRequestsMinusNewRequestsToWork = drop (1 - (length workingRequests)) unworkedRequests
+  let newRequestsToWork = take (5 - (length workingRequests)) unworkedRequests
+  let unworkedRequestsMinusNewRequestsToWork = drop (5 - (length workingRequests)) unworkedRequests
   newWork <- traverse (f currentTime) newRequestsToWork
   let nextWork = sortOn (\(Block _ (Begin begin) _ _ _ _ ) -> begin) (newWork ++
                                                                       unworkedRequestsMinusNewRequestsToWork ++
@@ -247,7 +247,7 @@ recvLoop tracker peerState@(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
   print $ "Blocked on recvLoop on peer_id: " ++ showPeerId peer_id ++ "at: " ++ (show currentTime)
   -- TODO If this is null but you still have checked out work, put the work back, I'm pretty sure I only need to do this on recv calls
   sendAll conn keepAlive
-  msg <- recv conn 4096
+  msg <- recv conn 16384
 
   let newPeerRPCParse@(PeerRPCParse _ maybeErrors _) = parseRPC tracker msg peerRPCParse
   if isJust maybeErrors then do
@@ -379,8 +379,11 @@ integerToBigEndian :: Integer -> Int -> Maybe [W.Word8]
 integerToBigEndian integer byteSize
   | maxIntInByteSize byteSize < integer = Nothing
   | otherwise = Just $ fromIntegral <$> (reverse . snd $ foldl' f (integer, []) (reverse [0..(byteSize-1)]))
-  where f (currentSize, accList) x = let byteValue = Bits.shiftR currentSize (8*x)
-                                     in (currentSize - (byteValue * 256), byteValue:accList)
+  where f (currentSize, accList) x = do
+                                     let byteValue = Bits.shiftR currentSize (8*x)
+                                     let newAccList = byteValue:accList
+                                     let padding = replicate (byteSize - (length newAccList)) 0
+                                     (currentSize - (bigEndianToInteger (fromIntegral <$> (newAccList ++ padding))), newAccList)
 
 parseRPC' tracker acc@(PeerRPCParse word8Buffer Nothing xs) word8
   | newBuffer == [0,0,0,0] = PeerRPCParse [] Nothing (xs ++ [PeerKeepAlive])
@@ -465,7 +468,7 @@ isValidBitField bs = len == fromIntegral (length $ drop 5 xs)
         len = xs !! 3 - 1
 
 request :: Integer -> Integer -> Integer -> BS.ByteString
-request index begin len = BS.pack $ concat [[0,0,1,3,6], fromJust $ integerToBigEndian index 4,
+request index begin len = BS.pack $ concat [[0,0,0,13,6], fromJust $ integerToBigEndian index 4,
                                                          fromJust $ integerToBigEndian begin 4,
                                                          fromJust $ integerToBigEndian len 4]
 
