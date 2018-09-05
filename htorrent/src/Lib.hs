@@ -17,24 +17,23 @@ errorHandler peer chan (Right x) = do
   writeChan chan $ FileManager.Error peer
   print $ "FORK FINALLY SUCCEEDED: " ++ show peer ++ " " ++ show x
 
-run :: String -> Integer -> IO ()
-run filename port = do
+run :: String -> Integer -> Chan () -> IO ()
+run filename port killChan = do
   peer_id <- getPeerID
   maybeBencode <- BEncode.maybeReadBencode filename
   let maybeTracker = maybeBencode >>= toTracker peer_id
   case maybeTracker of
     Right tracker -> do
-      --printf "tracker: %s" (show tracker)
       maybeTrackerResponse <- trackerRequest tracker port
       case maybeTrackerResponse of
-        Nothing ->
-          --print "got empty tracker response"
+        Nothing -> do
+          print "got empty tracker response"
           return ()
         (Just trackerResponse@(TrackerResponse (Peers peers) _ _ _ _ _ _)) -> do
           workChan <- newChan
           responseChan <- newChan
           -- start file manager with read and response chans
-          _ <- forkIO (FileManager.start tracker trackerResponse workChan responseChan peers)
+          _ <- forkIO (FileManager.start tracker trackerResponse workChan responseChan peers killChan)
           putStrLn "spawning child threads for peers"
           print $ Peer.initPieceMap tracker
           mapM_ (\peer -> forkFinally (Peer.start tracker peer workChan responseChan) (errorHandler peer responseChan)) peers

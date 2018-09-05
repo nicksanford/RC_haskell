@@ -110,9 +110,10 @@ createTrackerRequestPayload (Tracker (PeerId peer_id) (Announce url) _ _ (InfoHa
     --           else sum $ fmap getDirectoryFileLength $ getDirectoryInfoFiles $ fromJust maybeDirectoryInfo
         requestString = UTF8.toString $ BS.concat [ url
                                                   , "?peer_id=", peer_id
-                                                  , "&left=", UTF8.fromString $ show singleFileInfo
+                                                  -- TODO: Have this passed in from the main thread if content has already been downloaded
+                                                  , "&left=", UTF8.fromString $ show $ getSingleFileLength singleFileInfo
                                                   , "&event=started"
-                                                  , BS.concat [ "port=", UTF8.fromString $ show port]
+                                                  , BS.concat [ "&port=", UTF8.fromString $ show port]
                                                   , "&uploaded=0"
                                                   , "&downloaded=0"
                                                   , "&numwant=80"

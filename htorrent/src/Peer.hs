@@ -18,6 +18,7 @@ import qualified Data.Word8                as W
 import qualified Data.ByteString           as BS
 import qualified Data.ByteString.UTF8      as UTF8
 import qualified Data.ByteString.Base16    as B16
+import qualified Data.ByteString.Lazy    as Lazy
 import qualified Data.Either               as Either
 
 import           Control.Monad             (unless, forM_, when)
@@ -27,6 +28,7 @@ import qualified Data.Map                  as M
 import           Data.Maybe                (fromJust, isNothing, listToMaybe, fromMaybe, isJust)
 import qualified Data.Set as S
 import qualified Data.Time.Clock           as Clock
+import qualified Data.Binary               as Binary
 
 
 newtype Conn e = Conn e deriving (Eq, Show)
@@ -89,7 +91,7 @@ instance Show PeerRPCParse where
   show (PeerRPCParse word8s m rpcs) = "PeerRPCParse word8Length: " ++ (show $ length word8s) ++ " " ++ show m ++ " " ++ show rpcs
 
 type Work = [Block]
-data Block = Block (Index Integer) (Begin Integer) (Length Integer) (SentTimestamp (Maybe Clock.UTCTime)) (SentCount Integer) (Maybe (Payload)) deriving (Eq, Show)
+data Block = Block (Index Integer) (Begin Integer) (Length Integer) (SentTimestamp (Maybe Integer)) (SentCount Integer) (Maybe (Payload)) deriving (Eq, Show)
 
 fmBlockToPeerWork :: FM.BlockRequest -> Block
 fmBlockToPeerWork (FM.BlockRequest (FM.PieceIndex i) (FM.Begin b) (FM.RequestLength rl)) = 
@@ -207,35 +209,35 @@ filterUnworkedBlocks _ = False
 
 sendRequests :: PeerState -> IO PeerState
 sendRequests (PeerState a (Conn conn) b c d (Just work) e g) = do
-  currentTime <- Clock.getCurrentTime
+  let requestLimit = 5
   let completedRequests = filter filterCompletedBlocks work
   let workingRequests = filter filterWorkingBlocks work
   let unworkedRequests = filter filterUnworkedBlocks work
-  let newRequestsToWork = take (5 - (length workingRequests)) unworkedRequests
-  let unworkedRequestsMinusNewRequestsToWork = drop (5 - (length workingRequests)) unworkedRequests
-  newWork <- traverse (f currentTime) newRequestsToWork
+  let newRequestsToWork = take (requestLimit - (length workingRequests)) unworkedRequests
+  let unworkedRequestsMinusNewRequestsToWork = drop (requestLimit - (length workingRequests)) unworkedRequests
+  newWork <- traverse f newRequestsToWork
   let nextWork = sortOn (\(Block _ (Begin begin) _ _ _ _ ) -> begin) (newWork ++
                                                                       unworkedRequestsMinusNewRequestsToWork ++
                                                                       workingRequests ++
                                                                       completedRequests)
-  print $ show a ++
-          " work: " ++ (show $ length work) ++
-          " completedRequests: " ++ (show $ length completedRequests) ++ " " ++ (show completedRequests) ++
-          " workingRequests: " ++ (show $ length workingRequests) ++ " " ++ (show workingRequests) ++
-          " unworkedRequests: " ++ (show $ length unworkedRequests) ++
-          " newRequestsToWork: " ++ (show $ length newRequestsToWork) ++ " " ++ (show newRequestsToWork) ++
-          " unworkedRequestsMinusNewRequestsToWork: " ++ (show $ length unworkedRequestsMinusNewRequestsToWork) ++
-          " nextWork: " ++ (show $ length nextWork) ++
-          " currentHash: " ++ (UTF8.toString $ shaHashRaw $ BS.concat (fmap (\(Block _ _ _ _ _ (Just (Payload payload))) -> payload) completedRequests))
+  -- print $ show a ++
+  --         " work: " ++ (show $ length work) ++
+  --         " completedRequests: " ++ (show $ length completedRequests) ++ " " ++ (show completedRequests) ++
+  --         " workingRequests: " ++ (show $ length workingRequests) ++ " " ++ (show workingRequests) ++
+  --         " unworkedRequests: " ++ (show $ length unworkedRequests) ++
+  --         " newRequestsToWork: " ++ (show $ length newRequestsToWork) ++ " " ++ (show newRequestsToWork) ++
+  --         " unworkedRequestsMinusNewRequestsToWork: " ++ (show $ length unworkedRequestsMinusNewRequestsToWork) ++
+  --         " nextWork: " ++ (show $ length nextWork) ++
+  --         " currentHash: " ++ (UTF8.toString $ shaHashRaw $ BS.concat (fmap (\(Block _ _ _ _ _ (Just (Payload payload))) -> payload) completedRequests))
   return $ PeerState a (Conn conn) b c d (Just nextWork) e g
   -- TODO: Currently we are not going to factor in time but this allows us to add it later if we would like to
   where
-        f :: Clock.UTCTime -> Block -> IO Block
-        f currentTime (Block (Index pieceIndex) (Begin begin) (Length len) (SentTimestamp Nothing) (SentCount count) Nothing) = do
-            print $ "SENDING: " ++ (show $ (Block (Index pieceIndex) (Begin begin) (Length len) (SentTimestamp Nothing) (SentCount count) Nothing))
+        f :: Block -> IO Block
+        f (Block (Index pieceIndex) (Begin begin) (Length len) (SentTimestamp Nothing) (SentCount count) Nothing) = do
+            -- print $ "SENDING: " ++ (show $ (Block (Index pieceIndex) (Begin begin) (Length len) (SentTimestamp Nothing) (SentCount count) Nothing))
             sendAll conn $ request pieceIndex begin len
-            return $ Block (Index pieceIndex) (Begin begin) (Length len) (SentTimestamp $ Just currentTime) (SentCount (count + 1)) Nothing
-        f _ x = return x
+            return $ Block (Index pieceIndex) (Begin begin) (Length len) (SentTimestamp $ Just 0) (SentCount (count + 1)) Nothing
+        f x = return x
 sendRequests x = return x
 
 -- TODO Got to figure out how to send a keep alive to every peer every 30 seconds w/o blocking the thread
@@ -243,8 +245,8 @@ recvLoop :: T.Tracker -> PeerState -> IO ()
 --recvLoop tracker peerState@(PeerState (PeerId peer_id) (Conn conn) pieceMap) peerRPCParse workChan responseChan currentWork = do
 recvLoop tracker peerState@(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse peerRPCParse) _ _ _)  = do
   -- TODO If anything throws, catch it, put the work back in the response queue for the parent thread
-  currentTime <- Clock.getCurrentTime
-  print $ "Blocked on recvLoop on peer_id: " ++ showPeerId peer_id ++ "at: " ++ (show currentTime)
+  --currentTime <- Clock.getCurrentTime
+  print $ "Blocked on recvLoop on peer_id: " ++ show peer_id
   -- TODO If this is null but you still have checked out work, put the work back, I'm pretty sure I only need to do this on recv calls
   sendAll conn keepAlive
   msg <- recv conn 16384
@@ -263,7 +265,7 @@ recvLoop tracker peerState@(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
       return ()
     else do
       let newRPCPeerState = updatePeerState peerState newPeerRPCParse
-      putStrLn $ "RECVLOOP after update: " ++ show newRPCPeerState
+      -- putStrLn $ "RECVLOOP after update: " ++ show newRPCPeerState
       if cantDoWork newRPCPeerState then do
         -- TODO: clear your work state and send it back to the parent
         print "CANT DO WORK"
@@ -316,9 +318,9 @@ conformsToHash (PeerState _ _ (PieceMap pieceMap) _ _ _ _ _) i payloads = do
   let (expectedSha,_) = pieceMap !! (fromIntegral i)
   let combinedPayload = BS.concat $ fmap (\(Payload b) -> b) payloads
   let sha = shaHashRaw combinedPayload
-  print $ "CONFORMS TO HASH: Payload Length == " ++ (show $ BS.length combinedPayload)
-  print $ "CONFORMS TO HASH: expectedSha == " ++ (UTF8.toString expectedSha)
-  print $ "CONFORMS TO HASH: actual sha == " ++ (UTF8.toString sha)
+  -- print $ "CONFORMS TO HASH: Payload Length == " ++ (show $ BS.length combinedPayload)
+  -- print $ "CONFORMS TO HASH: expectedSha == " ++ (UTF8.toString expectedSha)
+  -- print $ "CONFORMS TO HASH: actual sha == " ++ (UTF8.toString sha)
   return $ if expectedSha == sha then Just combinedPayload else Nothing
 
 --[0,0,1,3,6,index,begin,length]
@@ -340,7 +342,7 @@ start tracker peer workChan responseChan =  do
   print $ "STARTPEER maybePeerResponse: " ++ show maybePeerResponse
   unless (isNothing maybePeerResponse) $ do
     let peerResponse@(PeerResponse _ (PeerId peer_id) (Conn conn)) = fromJust maybePeerResponse
-    print $ "STARTPEER sending interested for: " ++ show peer
+    -- print $ "STARTPEER sending interested for: " ++ show peer
     _ <- sendInterested peerResponse
 
     let peerState = PeerState (PeerId peer_id) (Conn conn) (initPieceMap tracker) (Chans (workChan, responseChan)) (RPCParse defaultPeerRPCParse) Nothing (PeerChoked False) (PeerChoking True)
@@ -364,26 +366,21 @@ initialRPCParse :: PeerRPCParse
 initialRPCParse = (PeerRPCParse [] Nothing [])
 
 parseRPC :: T.Tracker -> BS.ByteString -> PeerRPCParse -> PeerRPCParse
-parseRPC tracker bs peerRPCParse = do
-  foldl' (parseRPC' tracker) peerRPCParse $ BS.unpack bs
+parseRPC tracker bs peerRPCParse =
+  BS.foldl' (parseRPC' tracker) peerRPCParse bs
 
-bigEndianToInteger :: [W.Word8] -> Integer
-bigEndianToInteger xs = foldr f 0 zipList
-  where f (i, word) acc = (Bits.shift (fromIntegral word) i) + acc
-        zipList = zip ((*8) <$> [0..]) (reverse xs) :: [(Int, W.Word8)]
+bigEndianToInteger :: [Binary.Word8] -> Maybe Binary.Word32
+bigEndianToInteger xs =
+  if length xs == 4 then
+    Just $ Binary.decode $ Lazy.fromStrict $ BS.pack xs
+  else
+    Nothing
 
 maxIntInByteSize :: Int -> Integer
 maxIntInByteSize byteSize = foldr (\_ acc -> 256 * acc) 1 [0..(byteSize-1)]  - 1
 
-integerToBigEndian :: Integer -> Int -> Maybe [W.Word8]
-integerToBigEndian integer byteSize
-  | maxIntInByteSize byteSize < integer = Nothing
-  | otherwise = Just $ fromIntegral <$> (reverse . snd $ foldl' f (integer, []) (reverse [0..(byteSize-1)]))
-  where f (currentSize, accList) x = do
-                                     let byteValue = Bits.shiftR currentSize (8*x)
-                                     let newAccList = byteValue:accList
-                                     let padding = replicate (byteSize - (length newAccList)) 0
-                                     (currentSize - (bigEndianToInteger (fromIntegral <$> (newAccList ++ padding))), newAccList)
+integerToBigEndian :: Binary.Word32 -> [W.Word8]
+integerToBigEndian = BS.unpack .Lazy.toStrict . Binary.encode
 
 parseRPC' tracker acc@(PeerRPCParse word8Buffer Nothing xs) word8
   | newBuffer == [0,0,0,0] = PeerRPCParse [] Nothing (xs ++ [PeerKeepAlive])
@@ -418,12 +415,12 @@ parseRPC' tracker acc@(PeerRPCParse word8Buffer Nothing xs) word8
                                                   PeerRPCParse newBuffer (Just "ERROR parseRPC in BitField parse, extra bits are set") xs
                                                 else
                                                   PeerRPCParse (drop (bitfieldLength + 5) newBuffer) Nothing (xs ++ [BitField $ PieceMap $ zip (T.getTrackerPieces tracker) boolsBeforeCheck])
-  | take 5 newBuffer == [0,0,1,3,6] = if length newBuffer >= 8 then
-                                          PeerRPCParse [] Nothing (xs ++ [Request (bigEndianToInteger $ take 4 $ drop 5 newBuffer) (bigEndianToInteger $ take 4 $ drop 9 newBuffer) (bigEndianToInteger $ take 4 $ drop 13 newBuffer)])
+  | take 5 newBuffer == [0,0,1,3,6] = if length newBuffer >= 17 then
+                                          PeerRPCParse [] Nothing (xs ++ [Request (fromIntegral $ fromJust $ bigEndianToInteger $ take 4 $ drop 5 newBuffer) (fromIntegral $ fromJust $ bigEndianToInteger $ take 4 $ drop 9 newBuffer) (fromIntegral $ fromJust $ bigEndianToInteger $ take 4 $ drop 13 newBuffer)])
                                         else
                                           PeerRPCParse newBuffer Nothing xs
   | drop 4 (take 5 newBuffer) == [7] = do
-    let blockLen = fromIntegral $ (bigEndianToInteger $ take 4 newBuffer) - 9
+    let blockLen = fromIntegral $ (fromJust $ bigEndianToInteger $ take 4 newBuffer) - 9
     let blockWord8s = take blockLen $ drop 13 newBuffer
     let indexWord8s = take 4 $ drop 5 newBuffer
     let beginWord8s = take 4 $ drop 9 newBuffer
@@ -431,8 +428,8 @@ parseRPC' tracker acc@(PeerRPCParse word8Buffer Nothing xs) word8
     if length blockWord8s /= blockLen then
       PeerRPCParse newBuffer Nothing xs
     else do
-      let index = bigEndianToInteger indexWord8s
-      let begin = bigEndianToInteger beginWord8s
+      let index = fromIntegral $ fromJust $ bigEndianToInteger indexWord8s
+      let begin = fromIntegral $ fromJust $ bigEndianToInteger beginWord8s
       let block = BS.pack blockWord8s
       PeerRPCParse (drop (5 + 4 + 4 + blockLen) newBuffer) Nothing (xs ++ [Response index begin block])
   | otherwise = PeerRPCParse newBuffer Nothing xs
@@ -468,9 +465,9 @@ isValidBitField bs = len == fromIntegral (length $ drop 5 xs)
         len = xs !! 3 - 1
 
 request :: Integer -> Integer -> Integer -> BS.ByteString
-request index begin len = BS.pack $ concat [[0,0,0,13,6], fromJust $ integerToBigEndian index 4,
-                                                         fromJust $ integerToBigEndian begin 4,
-                                                         fromJust $ integerToBigEndian len 4]
+request index begin len =  BS.pack  $ ([0,0,0,13,6]) <> (integerToBigEndian $ fromIntegral index)
+                                                                 <> (integerToBigEndian $ fromIntegral begin)
+                                                                 <> (integerToBigEndian $ fromIntegral len)
 
 sendInterested :: PeerResponse -> IO ()
 sendInterested pr@(PeerResponse (InfoHash peer_info_hash) (PeerId peer_peer_id) (Conn conn)) = do
