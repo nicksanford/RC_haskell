@@ -372,12 +372,13 @@ start tracker peer@(Shared.Peer ip port) workChan responseChan =  do
     _ <- sendInterested peerResponse
 
     let peerState = PeerState (PeerId peer_id) (Conn conn) (initPieceMap tracker) (Chans (workChan, responseChan)) (RPCParse defaultPeerRPCParse) Nothing (PeerChoked False) (PeerChoking True) (Shared.PeerThreadId (ip <> (UTF8.fromString $ show port))) (LastHeartbeat Nothing)
+          -- TODO: You may need to close the connection if this fails, not sure of the consequences of this if I don't close it.
     E.catch (recvLoop tracker peerState) (\e -> do
                                              print $ "PEER " ++ (show peer) ++ " HIT EXCEPTION " ++ (show (e :: E.SomeException) )
                                          )
 
 defaultPeerRPCParse :: PeerRPCParse
-defaultPeerRPCParse = PeerRPCParse (Seq.empty) Nothing []
+defaultPeerRPCParse = PeerRPCParse Seq.empty Nothing []
 
 initPieceMap :: T.Tracker -> PieceMap
 initPieceMap t = PieceMap $ (\x -> (x, False)) <$> T.getTrackerPieces t
@@ -389,9 +390,6 @@ initPieceMap t = PieceMap $ (\x -> (x, False)) <$> T.getTrackerPieces t
 -- B/c you might not yet have all the data you need and multiple messages can be received in a given receive block
 -- there are also situations where you might want to drop the connection if the parsing rules are violated
 -- Right now this makes the assumption that we are only ever getting a single RPC in a given recv call (which is not true)
-
-initialRPCParse :: PeerRPCParse
-initialRPCParse = (PeerRPCParse (Seq.empty) Nothing [])
 
 parseRPC :: T.Tracker -> BS.ByteString -> PeerRPCParse -> PeerRPCParse
 parseRPC tracker bs peerRPCParse =

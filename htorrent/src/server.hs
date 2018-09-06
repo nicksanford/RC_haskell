@@ -7,14 +7,18 @@ import Network.Socket.ByteString (recv, sendAll, send)
 import qualified Control.Exception as E
 import Control.Monad (unless, forever, void)
 import Text.Printf (printf)
+import Data.Maybe (isJust)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 
-run :: String -> IO ()
-run port =  do
+import qualified Peer as Peer
+import qualified Tracker as Tracker
+
+run :: String -> Tracker.Tracker -> IO ()
+run port tracker = do
   print "Running, and listening on port %s\n"
   printf "HINT: run echo \"did you get this message?\"|  nc localhost %s\n" port
-  E.bracket(addrIO >>= open) close loop
+  E.bracket (addrIO >>= open) close loop
   where hints = defaultHints { addrSocketType = Stream
                              , addrFlags = [AI_PASSIVE]
                              }
@@ -28,11 +32,36 @@ run port =  do
           return sock
         loop sock = forever $ do
           (conn, peer) <- accept sock
-          putStrLn $ "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAa " ++ (show conn) ++ " from " ++ (show peer)
+          putStrLn $ "LOOP: Accepted connection " ++ (show conn) ++ " from " ++ (show peer)
+
           void $ forkFinally (talk conn peer) (\_ -> print ("closing " ++ (show conn) ++ "  from " ++ (show peer)) >> close conn)
+
+        loopTalk conn peer peerRPCParse = do
+          -- 3. respond to requests
+          -- 4. send have messages as you get more data
+          sendAll conn Peer.keepAlive
+          msg <- recv conn 16384
+          let newPeerRPCParse@(Peer.PeerRPCParse _ maybeErrors _) = Peer.parseRPC tracker msg peerRPCParse
+          print $ "LOOPTALK: newPeerRPCParse " ++ show newPeerRPCParse
+          unless (BS.null msg || isJust maybeErrors) $ do
+            print $ "LOOPTALK: ending " ++ (show $ BS.null msg) ++ " " ++ (show $ isJust maybeErrors)
+            loopTalk conn peer newPeerRPCParse
+
         talk conn peer = do
-          print $ "about to read " ++ (show conn) ++ "  from " ++ (show peer)
-          msg <- recv conn 4096
-          print $ BS.concat ["OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO  SERVER READ ", msg, " on ", (UTF8.fromString $ show conn), "  from ", (UTF8.fromString $ show peer)]
-          unless (BS.null msg) $ do
-            talk conn peer
+          -- 1. send handshake
+          -- 1.1. send interested
+          -- 1.2. send unchoke
+          msg <- recv conn 68
+          let maybeHandshakeResponse = Peer.readHandShake conn msg >>= Peer.validateHandshake tracker
+          case maybeHandshakeResponse of
+            Just _ -> do
+              let handshake = Peer.trackerToPeerHandshake tracker
+              sendAll conn handshake
+              sendAll conn Peer.interested
+              sendAll conn Peer.unchoke
+              -- 2. send bitmap
+              print $ "Peer " ++ (show peer) ++ " starting loopTalk"
+              loopTalk conn peer Peer.defaultPeerRPCParse
+            Nothing -> do
+              print $ "Peer " ++ (show peer) ++ " got invalid handshake response " ++ (show maybeHandshakeResponse)
+              return ()

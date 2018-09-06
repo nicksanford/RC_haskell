@@ -25,7 +25,7 @@ main = do
   args <- SE.getArgs
   killChan <- newChan
   _ <- forkIO $ Lib.run  (head args) port killChan
-  _ <- forkIO $ Server.run (show port)
+  putStrLn "Press q to exit"
   exitOnQ killChan
 
 exitOnQ killChan = do

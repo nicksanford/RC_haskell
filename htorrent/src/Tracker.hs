@@ -178,6 +178,9 @@ dictToMaybeDirectoryFile (BDict x) = DirectoryFile <$> (Path <$> (M.lookup (BStr
                                                        Just (MD5Sum $  M.lookup (BString "md5sum") x >>= bencodeToMaybeString)
 dictToMaybeDirectoryFile _ = Nothing
 
+getTrackerInfoHash :: Tracker -> BS.ByteString
+getTrackerInfoHash (Tracker _ _ _ _ (InfoHash bs) _ _  _) =  bs
+
 getTrackerPieces :: Tracker -> [BS.ByteString]
 getTrackerPieces (Tracker _ _ _ (Pieces bs) _ _ _  _) =  bs
 
@@ -186,6 +189,9 @@ getTrackerPieceLength (Tracker _ _ (PieceLength l) _ _ _ _  _) =  l
 
 getTrackerSingleFileInfo :: Tracker -> SingleFileInfo
 getTrackerSingleFileInfo (Tracker _ _ _ _ _ singleFileInfo _ _ ) = singleFileInfo
+
+getTrackerPeerId :: Tracker -> BS.ByteString
+getTrackerPeerId (Tracker (PeerId peerId) _ _ _ _ _ _ _ ) = peerId
 
 testTracker :: IO (Maybe Tracker)
 testTracker = do

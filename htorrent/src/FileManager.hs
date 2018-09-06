@@ -2,6 +2,7 @@
 module FileManager where
 import Tracker
 import Shared
+import qualified Server
 import Utils (unhex, shaHashRaw, shaHash)
 import qualified System.IO as SIO
 import qualified Control.Concurrent.Chan as Chan
@@ -235,6 +236,8 @@ start tracker port killChan = do
 
   workChan <- Chan.newChan
   responseChan <- Chan.newChan
+  -- start server here
+  Server.run (show port) tracker
 
   maybeTrackerResponse <- trackerRequest tracker port (downloadedSoFar tracker pieceMap)
   when (isNothing maybeTrackerResponse) $ do
