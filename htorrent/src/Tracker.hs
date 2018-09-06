@@ -19,6 +19,7 @@ import BEncode ( BEncode (..)
                , encode
                , maybeReadBencode
                )
+import Shared
 import Utils (escape, shaHash, getPeerID)
 
 newtype Announce e = Announce e deriving (Eq, Show)
@@ -44,10 +45,7 @@ data SingleFileInfo = SingleFileInfo (Name BS.ByteString) (Length Integer) (MD5S
 data DirectoryFile = DirectoryFile (Path BS.ByteString) (Length Integer) (MD5Sum (Maybe BS.ByteString)) deriving (Eq, Show)
 data DirectoryInfo = DirectoryInfo (Name BS.ByteString) (Files [DirectoryFile]) deriving (Eq, Show)
 
-type IP = BS.ByteString
-type Port = Integer
 -- TODO: You will need to implement a Maybe PeerId here as it is possible for that to be provided. If it is, then you need to verify that the peer id you get back from the handshake is the same as what the tracker said.
-data Peer = Peer IP Port deriving (Eq, Show)
 
 data Tracker = Tracker (PeerId BS.ByteString) (Announce BS.ByteString) (PieceLength Integer) (Pieces [BS.ByteString]) (InfoHash BS.ByteString) (SingleFileInfo) (Maybe DirectoryInfo) (Maybe (Encoding BS.ByteString)) deriving (Eq, Show)
 
@@ -102,7 +100,7 @@ toTracker peer_id (BDict d) =
           else Just (BS.take 20 bs, BS.drop 20 bs)
 toTracker _ _ = Left "ERROR: Tracker invalid due to absence of both single file dict and directory dict"
 
-createTrackerRequestPayload (Tracker (PeerId peer_id) (Announce url) _ _ (InfoHash info_hash) singleFileInfo maybeDirectoryInfo _) port =
+createTrackerRequestPayload (Tracker (PeerId peer_id) (Announce url) _ _ (InfoHash info_hash) singleFileInfo maybeDirectoryInfo _) port downloaded =
   requestString
   where
     -- left = if isJust maybeSingleFileInfo
@@ -111,19 +109,19 @@ createTrackerRequestPayload (Tracker (PeerId peer_id) (Announce url) _ _ (InfoHa
         requestString = UTF8.toString $ BS.concat [ url
                                                   , "?peer_id=", peer_id
                                                   -- TODO: Have this passed in from the main thread if content has already been downloaded
-                                                  , "&left=", UTF8.fromString $ show $ getSingleFileLength singleFileInfo
+                                                  , "&left=", UTF8.fromString $ show $ (getSingleFileLength singleFileInfo) - downloaded
                                                   , "&event=started"
                                                   , BS.concat [ "&port=", UTF8.fromString $ show port]
                                                   , "&uploaded=0"
-                                                  , "&downloaded=0"
-                                                  , "&numwant=80"
+                                                  , BS.concat [ "&downloaded=", UTF8.fromString $ show downloaded ]
+                                                  , "&numwant=500"
                                                   , "&info_hash=", escape info_hash
                                                   ]
 
 -- TODO delete the host parameter
-trackerRequest :: Tracker -> Integer -> IO (Maybe TrackerResponse)
-trackerRequest tracker port =
-  HTTP.parseRequest (createTrackerRequestPayload tracker port) >>=
+trackerRequest :: Tracker -> Integer -> Integer -> IO (Maybe TrackerResponse)
+trackerRequest tracker port downloaded =
+  HTTP.parseRequest (createTrackerRequestPayload tracker port downloaded) >>=
   HTTP.httpBS >>=
   handleTrackerRequest
 
@@ -193,6 +191,20 @@ testTracker :: IO (Maybe Tracker)
 testTracker = do
   peer_id <- getPeerID
   maybeBencode <- maybeReadBencode "example4.torrent"
+  case maybeBencode of
+    Right r ->
+      case toTracker peer_id r of
+        Right tracker ->
+          return $ Just  tracker
+        Left e2 ->
+          return Nothing
+    Left e ->
+        return Nothing
+
+testTracker2 :: String -> IO (Maybe Tracker)
+testTracker2 s = do
+  peer_id <- getPeerID
+  maybeBencode <- maybeReadBencode s
   case maybeBencode of
     Right r ->
       case toTracker peer_id r of
