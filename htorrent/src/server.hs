@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Server (run) where
+module Server (start) where
 
+import Control.Concurrent.Chan as Chan
 import Control.Concurrent (forkFinally, threadDelay) -- threadWaitRead, threadWaitWrite
 import Network.Socket hiding (recv)
 import Network.Socket.ByteString (recv, sendAll, send)
@@ -10,12 +11,14 @@ import Text.Printf (printf)
 import Data.Maybe (isJust)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
+import qualified System.Clock as Clock
 
 import qualified Peer as Peer
+import qualified Shared as Shared
 import qualified Tracker as Tracker
 
-run :: String -> Tracker.Tracker -> IO ()
-run port tracker = do
+start :: String -> Tracker.Tracker -> Chan.Chan Shared.WorkMessage -> Chan.Chan Shared.ResponseMessage -> Chan.Chan a -> IO ()
+start port tracker workChan responseChan broadcastChan = do
   print "Running, and listening on port %s\n"
   printf "HINT: run echo \"did you get this message?\"|  nc localhost %s\n" port
   E.bracket (addrIO >>= open) close loop
@@ -34,34 +37,50 @@ run port tracker = do
           (conn, peer) <- accept sock
           putStrLn $ "LOOP: Accepted connection " ++ (show conn) ++ " from " ++ (show peer)
 
-          void $ forkFinally (talk conn peer) (\_ -> print ("closing " ++ (show conn) ++ "  from " ++ (show peer)) >> close conn)
+          void $ forkFinally (talk conn peer broadcastChan) (\_ -> print ("closing " ++ (show conn) ++ "  from " ++ (show peer)) >> close conn)
 
-        loopTalk conn peer peerRPCParse = do
-          -- 3. respond to requests
-          -- 4. send have messages as you get more data
-          sendAll conn Peer.keepAlive
-          msg <- recv conn 16384
-          let newPeerRPCParse@(Peer.PeerRPCParse _ maybeErrors _) = Peer.parseRPC tracker msg peerRPCParse
-          print $ "LOOPTALK: newPeerRPCParse " ++ show newPeerRPCParse
-          unless (BS.null msg || isJust maybeErrors) $ do
-            print $ "LOOPTALK: ending " ++ (show $ BS.null msg) ++ " " ++ (show $ isJust maybeErrors)
-            loopTalk conn peer newPeerRPCParse
+        -- loopTalk conn peer peerRPCParse broadcastChan = do
+        --   -- 3. respond to requests
+        --   -- 4. send have messages as you get more data
+        --   --sendAll conn Peer.keepAlive
+        --   msg <- recv conn 16384
+        --   let newPeerRPCParse@(Peer.PeerRPCParse _ maybeErrors _) = Peer.parseRPC tracker msg peerRPCParse
+        --   print $ "LOOPTALK: newPeerRPCParse " ++ show newPeerRPCParse
+        --   unless (BS.null msg || isJust maybeErrors) $ do
+        --     print $ "LOOPTALK: ending " ++ (show $ BS.null msg) ++ " " ++ (show $ isJust maybeErrors)
+        --     loopTalk conn peer newPeerRPCParse broadcastChan
 
-        talk conn peer = do
+        talk conn peer broadcastChan = do
           -- 1. send handshake
           -- 1.1. send interested
           -- 1.2. send unchoke
           msg <- recv conn 68
-          let maybeHandshakeResponse = Peer.readHandShake conn msg >>= Peer.validateHandshake tracker
+          let maybeHandshakeResponse = Peer.readHandShake msg >>= Peer.validateHandshake tracker
           case maybeHandshakeResponse of
-            Just _ -> do
+            Just (Peer.PeerResponse _ (Peer.PeerId peer_id)) -> do
               let handshake = Peer.trackerToPeerHandshake tracker
               sendAll conn handshake
               sendAll conn Peer.interested
               sendAll conn Peer.unchoke
               -- 2. send bitmap
-              print $ "Peer " ++ (show peer) ++ " starting loopTalk"
-              loopTalk conn peer Peer.defaultPeerRPCParse
+              print $ "Peer " ++ (show peer) ++ " starting recvLoop"
+              time <- Clock.getTime Clock.Monotonic
+              let peerState = Peer.PeerState (Peer.PeerId peer_id)
+                                             (Peer.Conn conn)
+                                             (Peer.initPieceMap tracker)
+                                             (Peer.Chans (workChan, responseChan))
+                                             (Peer.RPCParse Peer.defaultPeerRPCParse)
+                                             Nothing
+                                             (Peer.PeerChoked False)
+                                             (Peer.PeerChoking True)
+                                             (Shared.PeerThreadId (UTF8.fromString $ show peer))
+                                             (Peer.TimeStamps ((Peer.LastHeartbeat Nothing),
+                                                               (Peer.LastKeepAlive time)))
+                                             []
+                    -- TODO: You may need to close the connection if this fails, not sure of the consequences of this if I don't close it.
+              E.catch (Peer.recvLoop tracker peerState) (\e ->
+                                                      print $ "SERVER PEER " ++ (show peer) ++ " HIT EXCEPTION " ++ (show (e :: E.SomeException) )
+                                                  )
             Nothing -> do
               print $ "Peer " ++ (show peer) ++ " got invalid handshake response " ++ (show maybeHandshakeResponse)
               return ()

@@ -40,6 +40,9 @@ library
                      , time
                      , directory
                      , clock
+                     , stm
+                     , unix
+                     , unix-bytestring
   default-language:    Haskell2010
 
 executable htorrent

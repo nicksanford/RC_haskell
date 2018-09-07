@@ -471,6 +471,7 @@ instance (Arbitrary a) => Arbitrary (GoatLord a) where
     resize 1 $ frequency [ (1, return $ NoGoat)
                          , (1, return $ OneGoat x)
                          , (1, return $ MoarGoats c d e) ]
+
 type GoatLordFC = GoatLord Int->
                   IntToInt ->
                   IntToInt ->

@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 module Spec where
+
 import Test.Hspec
 import Test.QuickCheck
 import Test.QuickCheck.Checkers
@@ -56,15 +57,15 @@ instance (Functor n, Arbitrary (n a), Arbitrary a) => Arbitrary (S n a) where
 --   (S x y) =-= (S p q) = (property $ (=-=) <$> x <*> p) .&. (y =-= q)
 instance (Eq (n a), Eq a) => EqProp (S n a) where (=-=) = eq
 
--- instance Arbitrary a => Arbitrary (Tree a) where
---    arbitrary = do
---      a <- arbitrary
---      b <- arbitrary
---      c <- arbitrary
---      frequency [ (1, return $ Leaf a)
---                , (1, return $ Node a b c)
---                , (1, return Empty)
---                ]
+instance Arbitrary a => Arbitrary (Tree a) where
+   arbitrary = do
+     a <- arbitrary
+     b <- arbitrary
+     c <- arbitrary
+     frequency [ (1, return $ a)
+               , (1, return $ Node a b c)
+               , (1, return Empty)
+               ]
 
 instance (Eq a) => EqProp (Tree a) where (=-=) = eq
 
@@ -143,6 +144,6 @@ main = hspec $ do
       let trigger :: Tree (Int, Double, String)
           trigger = undefined
       verboseBatch (functor trigger)
-      verboseBatch (semigroup trigger)
-      verboseBatch (monoid trigger)
+      -- verboseBatch (semigroup trigger)
+      -- verboseBatch (monoid trigger)
       verboseBatch (traversable trigger)

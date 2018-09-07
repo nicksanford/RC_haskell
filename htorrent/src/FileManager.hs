@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PackageImports #-}
 module FileManager where
 import Tracker
 import Shared
@@ -19,6 +20,12 @@ import System.Exit (exitSuccess)
 import Control.Monad (when, unless)
 import Control.Concurrent (forkFinally, forkIO, ThreadId, threadDelay)
 import qualified System.Clock as Clock
+import qualified Control.Concurrent.STM.TChan as TChan
+import qualified System.Posix.IO as PosixIO
+import qualified "unix-bytestring" System.Posix.IO.ByteString as PosixIOBS
+import qualified System.Posix.Files.ByteString as PosixFilesBS
+import qualified Control.Exception as E
+
 
 -- data Tracker = Tracker (PeerId BS.ByteString)
 --                        (Announce BS.ByteString)
@@ -170,7 +177,7 @@ loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWor
   print $ "Downloaded " ++ (show $ floor ((((fromIntegral $ length (filter (snd) newPieceMap)) / (fromIntegral $ length newPieceMap))) * 100)) ++ "%"
   when (allPiecesWritten newPieceMap) $ do
     print "DONE!"
-    Chan.writeChan killChan ()
+    -- Chan.writeChan killChan ()
 
   loop tracker workChan responseChan newPeers killChan newPieceMap newCheckouts filteredWorkToBeDone
   where allPiecesWritten = all snd
@@ -212,8 +219,8 @@ downloadedSoFar :: Tracker.Tracker -> [(BS.ByteString, Bool)] -> Integer
 downloadedSoFar tracker pieceMap =
   (fromIntegral $ length $ filter snd pieceMap) * getTrackerPieceLength tracker
 
-forkPeer :: Tracker.Tracker -> Chan.Chan WorkMessage -> Chan.Chan ResponseMessage -> Peer -> IO ThreadId
-forkPeer tracker workChan responseChan peer = forkFinally (Peer.start tracker peer workChan responseChan) (errorHandler peer responseChan)
+forkPeer :: Tracker.Tracker -> Chan.Chan WorkMessage -> Chan.Chan ResponseMessage -> Chan.Chan a -> Peer -> IO ThreadId
+forkPeer tracker workChan responseChan broadcastChan peer = forkFinally (Peer.start tracker peer workChan responseChan broadcastChan) (errorHandler peer responseChan)
 
 getPeers :: TrackerResponse -> [Peer]
 getPeers (TrackerResponse (Peers peers) _ _ _ _ _ _) = peers
@@ -236,8 +243,9 @@ start tracker port killChan = do
 
   workChan <- Chan.newChan
   responseChan <- Chan.newChan
+  broadcastChan <- Chan.newChan
   -- start server here
-  Server.run (show port) tracker
+  _ <- forkIO $ Server.start (show port) tracker workChan responseChan broadcastChan
 
   maybeTrackerResponse <- trackerRequest tracker port (downloadedSoFar tracker pieceMap)
   when (isNothing maybeTrackerResponse) $ do
@@ -248,7 +256,7 @@ start tracker port killChan = do
   let peers = getPeers trackerResponse
 
   putStrLn "spawning child threads for peers"
-  mapM_ (forkPeer tracker workChan responseChan) peers
+  mapM_ (forkPeer tracker workChan responseChan broadcastChan) peers
   --_ <- forkIO $ timer tracker port  (secondsBetweenTrackerCalls trackerResponse)
   _ <- forkIO $ checkoutTimer responseChan
      -- number of microseconds in a second
@@ -288,11 +296,16 @@ checkoutTimer responseChan = do
 createFile :: Tracker.SingleFileInfo -> IO ()
 createFile (Tracker.SingleFileInfo (Tracker.Name fileName) (Tracker.Length fileLength) _) = SIO.withBinaryFile (UTF8.toString fileName) SIO.WriteMode $ flip SIO.hSetFileSize fileLength
 
+-- import qualified System.Posix.IO as PosixIO
+-- import qualified "unix-bytestring" System.Posix.IO.ByteString as PosixIOBS
+-- import qualified System.Posix.Files.ByteString as PosixFilesBS
 writePiece :: Tracker.Tracker -> SIO.FilePath -> PieceResponse -> IO ()
-writePiece tracker filePath (PieceResponse (PieceIndex pieceIndex) (PieceContent content)) = SIO.withBinaryFile filePath SIO.ReadWriteMode f
-  where f h = do
-          SIO.hSeek h SIO.AbsoluteSeek $ getTrackerPieceLength tracker * pieceIndex
-          BS.hPut h content
+writePiece tracker filePath (PieceResponse (PieceIndex pieceIndex) (PieceContent content)) = do
+  fd <- PosixIO.openFd filePath PosixIO.WriteOnly Nothing PosixIO.defaultFileFlags
+  written <- PosixIOBS.fdPwrite fd content $ fromIntegral $ getTrackerPieceLength tracker * pieceIndex
+  PosixIO.closeFd fd
+  when (fromIntegral written /= BS.length content) $
+    E.throw $ userError "bad pwrite"
 
 -- TODO: Make sure you check whether the block request is valid or not before performing it
 readBlock :: Tracker.Tracker -> SIO.FilePath -> BlockRequest -> IO (BS.ByteString)
@@ -318,8 +331,7 @@ test = do
 
   let pieceList = getPieceList t
 
-  let Tracker.SingleFileInfo (Tracker.Name fileName) (Tracker.Length fileLength) _ = getTrackerSingleFileInfo t
-  let singleFileInfo = Tracker.getTrackerSingleFileInfo t
+  let singleFileInfo@(Tracker.SingleFileInfo (Tracker.Name fileName) (Tracker.Length fileLength) _) = getTrackerSingleFileInfo t
   let pieceLength = Tracker.getTrackerPieceLength t
 
   print $ "singleFileInfo " ++ (show singleFileInfo)
