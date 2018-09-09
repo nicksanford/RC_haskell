@@ -14,20 +14,15 @@ import Data.Char
 import System.Exit
 import Control.Concurrent.Chan (newChan, readChan)
 
-host :: BS.ByteString
-host = "0.0.0.0"
-
-port :: Integer
-port = 6862
-
 main :: IO ()
 main = do
   args <- SE.getArgs
   killChan <- newChan
-  _ <- forkIO $ Lib.run  (head args) port killChan
+  let arg1:arg2:_ = args
+  _ <- forkIO $ Lib.run arg1 arg2 killChan
   putStrLn "Press q to exit"
   exitOnQ killChan
 
 exitOnQ killChan = do
-    response <- readChan killChan
+    _ <- readChan killChan
     exitSuccess

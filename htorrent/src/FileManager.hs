@@ -100,7 +100,7 @@ responseToMaybeRequest _ = Nothing
 
 
 loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWorkToBeDone = do
-  print $ "RESPONSE CHANNEL: number of active peers: " ++ (show $ length peers)
+  print $ "RESPONSE CHANNEL: number of active peers: " ++ (show $ length peers) ++ " peers " ++ (show peers)
   response <- Chan.readChan responseChan
   print $ "RESPONSE CHANNEL got data"
   let Tracker.SingleFileInfo (Tracker.Name bsFileName) (Tracker.Length fileLength) _ = getTrackerSingleFileInfo tracker
@@ -216,11 +216,16 @@ setupFilesAndCreatePieceMap tracker killChan =  do
   return $ fromJust maybePieceMap2
 
 downloadedSoFar :: Tracker.Tracker -> [(BS.ByteString, Bool)] -> Integer
-downloadedSoFar tracker pieceMap =
-  (fromIntegral $ length $ filter snd pieceMap) * getTrackerPieceLength tracker
+downloadedSoFar tracker pieceMap = do
+  let singleFileInfo = getTrackerSingleFileInfo tracker
 
-forkPeer :: Tracker.Tracker -> Chan.Chan WorkMessage -> Chan.Chan ResponseMessage -> Chan.Chan a -> Peer -> IO ThreadId
-forkPeer tracker workChan responseChan broadcastChan peer = forkFinally (Peer.start tracker peer workChan responseChan broadcastChan) (errorHandler peer responseChan)
+  if and $ fmap snd pieceMap then
+    getSingleFileLength singleFileInfo
+  else
+    (fromIntegral $ length $ filter snd pieceMap) * getTrackerPieceLength tracker
+
+forkPeer :: Tracker.Tracker -> Chan.Chan WorkMessage -> Chan.Chan ResponseMessage -> Chan.Chan a -> Peer.PieceMap -> Peer  -> IO ThreadId
+forkPeer tracker workChan responseChan broadcastChan pieceMap peer = forkFinally (Peer.start tracker peer workChan responseChan broadcastChan pieceMap) (errorHandler peer responseChan)
 
 getPeers :: TrackerResponse -> [Peer]
 getPeers (TrackerResponse (Peers peers) _ _ _ _ _ _) = peers
@@ -228,7 +233,7 @@ getPeers (TrackerResponse (Peers peers) _ _ _ _ _ _) = peers
 secondsBetweenTrackerCalls :: TrackerResponse -> Int
 secondsBetweenTrackerCalls (TrackerResponse _ _ _ (Interval interval) _ _ _) = fromIntegral interval
 
-start :: Tracker.Tracker -> Integer -> Chan.Chan () -> IO ()
+start :: Tracker.Tracker -> String -> Chan.Chan () -> IO ()
 start tracker port killChan = do
 
   --putStrLn $ "ADDING WORK TO CHANNEL: " ++ (show workToBeDone)
@@ -245,9 +250,10 @@ start tracker port killChan = do
   responseChan <- Chan.newChan
   broadcastChan <- Chan.newChan
   -- start server here
-  _ <- forkIO $ Server.start (show port) tracker workChan responseChan broadcastChan
+  _ <- forkIO $ Server.start port tracker workChan responseChan broadcastChan (Peer.PieceMap pieceMap)
 
   maybeTrackerResponse <- trackerRequest tracker port (downloadedSoFar tracker pieceMap)
+  print ("maybeTrackerResponse: " ++ show maybeTrackerResponse)
   when (isNothing maybeTrackerResponse) $ do
     print "ERROR: got empty tracker response"
     Chan.writeChan killChan ()
@@ -256,7 +262,7 @@ start tracker port killChan = do
   let peers = getPeers trackerResponse
 
   putStrLn "spawning child threads for peers"
-  mapM_ (forkPeer tracker workChan responseChan broadcastChan) peers
+  mapM_ (forkPeer tracker workChan responseChan broadcastChan (Peer.PieceMap pieceMap)) peers
   --_ <- forkIO $ timer tracker port  (secondsBetweenTrackerCalls trackerResponse)
   _ <- forkIO $ checkoutTimer responseChan
      -- number of microseconds in a second

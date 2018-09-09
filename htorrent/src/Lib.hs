@@ -9,7 +9,7 @@ import Utils (getPeerID)
 import Control.Concurrent (forkFinally, forkIO)
 import Control.Concurrent.Chan (newChan, writeChan, Chan)
 
-run :: String -> Integer -> Chan () -> IO ()
+run :: String -> String -> Chan () -> IO ()
 run filename port killChan = do
   peer_id <- getPeerID
   maybeBencode <- BEncode.maybeReadBencode filename

@@ -111,7 +111,7 @@ createTrackerRequestPayload (Tracker (PeerId peer_id) (Announce url) _ _ (InfoHa
                                                   -- TODO: Have this passed in from the main thread if content has already been downloaded
                                                   , "&left=", UTF8.fromString $ show $ (getSingleFileLength singleFileInfo) - downloaded
                                                   , "&event=started"
-                                                  , BS.concat [ "&port=", UTF8.fromString $ show port]
+                                                  , BS.concat [ "&port=", UTF8.fromString port]
                                                   , "&uploaded=0"
                                                   , BS.concat [ "&downloaded=", UTF8.fromString $ show downloaded ]
                                                   , "&numwant=500"
@@ -119,7 +119,7 @@ createTrackerRequestPayload (Tracker (PeerId peer_id) (Announce url) _ _ (InfoHa
                                                   ]
 
 -- TODO delete the host parameter
-trackerRequest :: Tracker -> Integer -> Integer -> IO (Maybe TrackerResponse)
+trackerRequest :: Tracker -> String -> Integer -> IO (Maybe TrackerResponse)
 trackerRequest tracker port downloaded =
   HTTP.parseRequest (createTrackerRequestPayload tracker port downloaded) >>=
   HTTP.httpBS >>=

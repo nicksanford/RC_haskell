@@ -36,7 +36,7 @@ escape x = case fmap (\(a,b) -> (BS.singleton a, b)) (BS.uncons x) of
 getPeerID :: IO BS.ByteString
 getPeerID = do
   g <- R.getStdGen
-  return $ BS.concat ["-TR2940-",  BS.pack $ take 12 $ alphaNums g]
+  return $ BS.concat ["-HT2940-",  BS.pack $ take 12 $ alphaNums g]
 
 randomBytes :: Int -> IO BS.ByteString
 randomBytes  = getRandomBytes

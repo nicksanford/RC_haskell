@@ -43,6 +43,7 @@ library
                      , stm
                      , unix
                      , unix-bytestring
+                     , bitwise
   default-language:    Haskell2010
 
 executable htorrent
