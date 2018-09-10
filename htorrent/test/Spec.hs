@@ -3,10 +3,12 @@ import Test.Hspec
 import Test.QuickCheck
 import Test.QuickCheck.Checkers
 import Test.QuickCheck.Classes
+import Data.Maybe (fromJust)
 
 import BEncode
 import qualified Tracker as T
 import qualified FileManager as FM
+import qualified Shared as Shared
 import qualified Peer as Peer
 import qualified Data.Map as M
 import qualified Data.ByteString as BS
@@ -71,7 +73,7 @@ encodeDecodeRoundTrip_prop bencode = bencode == ((\(Run "" (Just x)) -> x) . dec
 newtype FourByteBigEndian = FourByteBigEndian [W.Word8] deriving (Eq, Show)
 
 bigEndianToInteger_prop :: FourByteBigEndian -> Bool 
-bigEndianToInteger_prop (FourByteBigEndian word8s) = (Just word8s) == Peer.integerToBigEndian (Peer.bigEndianToInteger word8s) (length word8s)
+bigEndianToInteger_prop (FourByteBigEndian word8s) = word8s == Peer.integerToBigEndian (fromJust $ Peer.bigEndianToInteger word8s)
   
 
 main :: IO ()
@@ -132,14 +134,14 @@ main = hspec $ do
     it "when all lengths are summed up it should equal the length of the content" $ do
       Just tracker <- T.testTracker
       let T.SingleFileInfo (T.Name _) (T.Length totalLength) (T.MD5Sum _) = T.getTrackerSingleFileInfo tracker
-      sum [len | FM.BlockRequest _ _ (FM.RequestLength len) <- FM.getRequestList tracker] `shouldBe` totalLength
+      sum [len | Shared.BlockRequest _ _ (Shared.RequestLength len) <- FM.getRequestList tracker] `shouldBe` totalLength
 
       Just (T.Tracker p a pl ps ih (T.SingleFileInfo n (T.Length l) md5) mdi me) <- T.testTracker
       let newTracker = (T.Tracker p a pl ps ih (T.SingleFileInfo n (T.Length (l+3)) md5) mdi me)
-      sum [len | FM.BlockRequest _ _ (FM.RequestLength len) <- FM.getRequestList newTracker] `shouldBe` l+3
+      sum [len | Shared.BlockRequest _ _ (Shared.RequestLength len) <- FM.getRequestList newTracker] `shouldBe` l+3
 
       let newnewTracker = (T.Tracker p a pl ps ih (T.SingleFileInfo n (T.Length (l-3)) md5) mdi me)
-      sum [len | FM.BlockRequest _ _ (FM.RequestLength len) <- FM.getRequestList newnewTracker] `shouldBe` l-3
+      sum [len | Shared.BlockRequest _ _ (Shared.RequestLength len) <- FM.getRequestList newnewTracker] `shouldBe` l-3
 
     it "there should be no duplicate elements" $ do
       Just tracker <- T.testTracker
@@ -147,23 +149,23 @@ main = hspec $ do
 
     it "the length should never exceed the blockSize" $ do
       Just tracker <- T.testTracker
-      maximum [len | FM.BlockRequest _ _ (FM.RequestLength len) <- FM.getRequestList tracker] `shouldBe` FM.blockSize
+      maximum [len | Shared.BlockRequest _ _ (Shared.RequestLength len) <- FM.getRequestList tracker] `shouldBe` Shared.blockSize
 
     it "the length should never be smaller or equal to 0" $ do
       Just tracker <- T.testTracker
-      minimum [len | FM.BlockRequest _ _ (FM.RequestLength len) <- FM.getRequestList tracker] `shouldSatisfy` (> 0)
+      minimum [len | Shared.BlockRequest _ _ (Shared.RequestLength len) <- FM.getRequestList tracker] `shouldSatisfy` (> 0)
 
     it "when grouped by pieceIndex, there should be the same number of pieces and the indexes should be the same as the piece indexes" $ do
       Just tracker <- T.testTracker
       let pieces = T.getTrackerPieces tracker
-      let groupedRequestList = L.groupBy (\(FM.BlockRequest (FM.PieceIndex x) _ _) (FM.BlockRequest (FM.PieceIndex y) _ _) -> x == y) $ FM.getRequestList tracker
+      let groupedRequestList = L.groupBy (\(Shared.BlockRequest (Shared.PieceIndex x) _ _) (Shared.BlockRequest (Shared.PieceIndex y) _ _) -> x == y) $ FM.getRequestList tracker
       length groupedRequestList `shouldBe` length pieces
 
     it "when grouped by pieceIndex, the indexes should be the same as the piece indexes" $ do
       Just tracker <- T.testTracker
       let pieces = T.getTrackerPieces tracker
       let rl = FM.getRequestList tracker
-      let requestIndeciesSet = S.fromList $ fmap (\(FM.BlockRequest (FM.PieceIndex x) _ _) -> x) rl
+      let requestIndeciesSet = S.fromList $ fmap (\(Shared.BlockRequest (Shared.PieceIndex x) _ _) -> x) rl
       (S.size requestIndeciesSet) `shouldBe` (fromIntegral $ length pieces)
 
     it "still works if the total length is not a power of 2 above" $ do
@@ -171,7 +173,7 @@ main = hspec $ do
       let newTracker = (T.Tracker p a pl ps ih (T.SingleFileInfo n (T.Length (l+3)) md5) mdi me)
       let pieces = T.getTrackerPieces newTracker
       let rl = FM.getRequestList newTracker
-      let requestIndeciesSet = S.fromList $ fmap (\(FM.BlockRequest (FM.PieceIndex x) _ _) -> x) rl
+      let requestIndeciesSet = S.fromList $ fmap (\(Shared.BlockRequest (Shared.PieceIndex x) _ _) -> x) rl
       (S.size requestIndeciesSet) `shouldBe` (fromIntegral $ length pieces)
 
     it "still works if the total length is not a power of 2 below" $ do
@@ -179,5 +181,5 @@ main = hspec $ do
       let newTracker = (T.Tracker p a pl ps ih (T.SingleFileInfo n (T.Length (l-3)) md5) mdi me)
       let pieces = T.getTrackerPieces newTracker
       let rl = FM.getRequestList newTracker
-      let requestIndeciesSet = S.fromList $ fmap (\(FM.BlockRequest (FM.PieceIndex x) _ _) -> x) rl
+      let requestIndeciesSet = S.fromList $ fmap (\(Shared.BlockRequest (Shared.PieceIndex x) _ _) -> x) rl
       (S.size requestIndeciesSet) `shouldBe` (fromIntegral $ length pieces)
