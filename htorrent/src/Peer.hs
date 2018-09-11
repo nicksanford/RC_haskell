@@ -135,6 +135,7 @@ data PeerRPC = PeerKeepAlive
              | Request Integer Integer Integer
              | Response Integer Integer BS.ByteString
              deriving (Eq, Show)
+data Piece = Piece Integer Integer BS.ByteString deriving (Eq, Show)
 
 data PeerRPCParse = PeerRPCParse (Seq.Seq W.Word8) (Maybe BS.ByteString) [PeerRPC] deriving (Eq, Show)
 
@@ -144,6 +145,10 @@ data PeerRPCParse = PeerRPCParse (Seq.Seq W.Word8) (Maybe BS.ByteString) [PeerRP
 
 type Work = [Block]
 data Block = Block (Index Integer) (Begin Integer) (Length Integer) (SentTimestamp (Maybe Integer)) (SentCount Integer) (Maybe (Payload)) deriving (Eq, Show)
+
+peerRPCToPiece :: PeerRPC -> Maybe Piece
+peerRPCToPiece (Response pieceIndex blockOffset content) = Just $ Piece pieceIndex blockOffset content 
+peerRPCToPiece _                                         = Nothing
 
 fmBlockToPeerWork :: Shared.BlockRequest -> Block
 fmBlockToPeerWork (Shared.BlockRequest (Shared.PieceIndex i) (Shared.Begin b) (Shared.RequestLength rl)) = 
@@ -384,7 +389,7 @@ recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
 
   msg <- recv conn 16384
 
-  let newPeerRPCParse@(PeerRPCParse _ maybeErrors _) = parseRPC selfState msg $ rpcParse fsmState
+  let newPeerRPCParse@(PeerRPCParse _ maybeErrors _) = parseRPC (selfPieceMap selfState) msg $ rpcParse fsmState
   myLog fsmState $ " newPeerRPCParse: " ++ (show newPeerRPCParse)
 
   if (isJust maybeErrors) then do
@@ -410,13 +415,13 @@ recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
         recvLoop updatedFSMStateWithoutWork-- newPeerRPCParse workChan responseChan currentWork
       else do
         -- finalPeerState <- sendFinishedWorkBackToManager updatedFSMState >>= tryToPullWork >>= sendRequests
-        peerStateAfterWork <- tryToPullWork updatedFSMState
-        newPeerState <- sendFinishedWorkBackToManager peerStateAfterWork
+        finalPeerState <- sendFinishedWorkBackToManager updatedFSMState
                               >>= buildPieces
                               >>= sendPieces
+                              >>= tryToPullWork
+                              >>= sendRequests
     --    print "CAN DO WORK, PULLING WORK"
     --    print "GOT WORK"
-        finalPeerState <- sendRequests newPeerState
         -- DONE: request data
         -- TODO: check if I have all the data I need
         -- TODO: send work back to parent thread if I am good
@@ -429,23 +434,23 @@ sendPieces fsmState = do --(FSMState a (Conn conn) c d (RPCParse (PeerRPCParse b
   myLog fsmState $ "sending " ++ (show $ length $ pieces fsmState) ++ " pieces to peer " ++ (show $ pieces fsmState)
   let bs = (pieceToBS <$> pieces fsmState)
   --
-  let selfState = getSelf fsmState
-  let newPeerRPCParse@(PeerRPCParse leftOver maybeErrors msgs) = parseRPC selfState (BS.concat bs) $ defaultPeerRPCParse
+  -- let selfState = getSelf fsmState
+  -- let newPeerRPCParse@(PeerRPCParse leftOver maybeErrors msgs) = parseRPC selfState (BS.concat bs) $ defaultPeerRPCParse
   --
-  mapM_ t msgs
+  -- mapM_ t msgs
   mapM_ (sendAll $ getConn fsmState) bs
   return $ clearPieces fsmState
   --
-  where t (Response x y content) = do
-          let (PieceMap pm) = selfPieceMap $ getSelf fsmState
-          myLog fsmState (show $ (shaHashRaw content) `elem` (fmap fst pm))
+  -- where t (Response x y content) = do
+  --         let (PieceMap pm) = selfPieceMap $ getSelf fsmState
+  --         myLog fsmState (show $ (shaHashRaw content) `elem` (fmap fst pm))
 
 buildPieces :: FSMState -> IO FSMState
-buildPieces fsmState@(FSMState id singleFileInfo pieceLength conn peer self wc rc rpc work pieces lhb lka) = do-- (PeerState a b c d (RPCParse (PeerRPCParse buffer err parsedRPCs)) f g h i j pieces) = do
+buildPieces fsmState@(FSMState fsmID singleFileInfo pieceLength conn peer self wc rc rpc work pieces lhb lka) = do-- (PeerState a b c d (RPCParse (PeerRPCParse buffer err parsedRPCs)) f g h i j pieces) = do
   let (PeerRPCParse buffer err parsedRPCs) = rpcParse fsmState
-  newPieces <- peerRPCsToPieces fsmState parsedRPCs
+  newPieces <- peerRPCsToPieces (getPieceLength fsmState) (getSingleFileInfo fsmState) parsedRPCs
   let newRPC = PeerRPCParse buffer err $ filter (not . isRequest) parsedRPCs
-  return $ FSMState id singleFileInfo pieceLength conn peer self wc rc newRPC work newPieces lhb lka
+  return $ FSMState fsmID singleFileInfo pieceLength conn peer self wc rc newRPC work newPieces lhb lka
   where isRequest :: PeerRPC -> Bool
         isRequest (Request _ _ _) = True
         isRequest _               = False
@@ -453,34 +458,31 @@ buildPieces fsmState@(FSMState id singleFileInfo pieceLength conn peer self wc r
 -- peerRPCToPieces rpcs = filter f rpcs
 --   where f (Request )= 
 
-data Piece = Piece Integer Integer BS.ByteString deriving (Eq, Show)
 
 pieceToBS :: Piece -> BS.ByteString
 pieceToBS (Piece index offset content) =
-  (BS.pack ((integerToBigEndian $ (fromIntegral $ BS.length content) + 1) <>
+  (BS.pack ((integerToBigEndian $ (fromIntegral $ BS.length content) + 9) <>
   [7] <>
   (integerToBigEndian $ fromIntegral index) <> (integerToBigEndian $ fromIntegral offset)))
   <> content
 
 
 -- TODO: Need to check for whether the request is valid / safe
-peerRPCsToPieces :: FSMState -> [PeerRPC] -> IO [Piece]
-peerRPCsToPieces fsmState rpcs = do
-  let (fileName, _fileLength) = getSingleFileInfo fsmState
+peerRPCsToPieces :: Integer -> (BS.ByteString, Integer) -> [PeerRPC] -> IO [Piece]
+peerRPCsToPieces pieceLen (fileName, _fileLength) rpcs = do
   mapM (r $ UTF8.toString fileName) $ filter isRequest rpcs
   where r fileName (Request index begin len) = do
-          myLog fsmState $ "Request: " ++ (show $ Request index begin len)
+--          myLog fsmState $ "Request: " ++ (show $ Request index begin len)
           fd <- PosixIO.openFd fileName PosixIO.ReadOnly Nothing PosixIO.defaultFileFlags
-          readBS <- PosixIOBS.fdPread fd (fromIntegral len) (fromIntegral $ (pieceLength * index) + begin)
+          readBS <- PosixIOBS.fdPread fd (fromIntegral len) (fromIntegral $ (pieceLen * index) + begin)
           PosixIO.closeFd fd
-          myLog fsmState $ "byte count " ++ (show $ fromIntegral len)
-          myLog fsmState $ "offset " ++ (show $ fromIntegral $ (pieceLength * index) + begin)
-          myLog fsmState $ "BS LENGTH " ++ (show $ BS.length readBS)
+--          myLog fsmState $ "byte count " ++ (show $ fromIntegral len)
+--          myLog fsmState $ "offset " ++ (show $ fromIntegral $ (pieceLength * index) + begin)
+--          myLog fsmState $ "BS LENGTH " ++ (show $ BS.length readBS)
           return $ Piece index begin readBS
         isRequest :: PeerRPC -> Bool
-        isRequest Request{} = True
+        isRequest (Request _ _ _) = True
         isRequest _         = False
-        pieceLength = getPieceLength fsmState
 -- import qualified System.Posix.IO as PosixIO
 -- import qualified "unix-bytestring" System.Posix.IO.ByteString as PosixIOBS
 -- import qualified System.Posix.Files.ByteString as PosixFilesBS
@@ -608,11 +610,11 @@ maxIntInByteSize byteSize = foldr (\_ acc -> 256 * acc) 1 [0..(byteSize-1)]  - 1
 integerToBigEndian :: Binary.Word32 -> [W.Word8]
 integerToBigEndian = BS.unpack .Lazy.toStrict . Binary.encode
 
-parseRPC :: SelfState -> BS.ByteString -> PeerRPCParse -> PeerRPCParse
-parseRPC selfState bs peerRPCParse =
-  BS.foldl (parseRPC' selfState) peerRPCParse bs
+parseRPC :: PieceMap -> BS.ByteString -> PeerRPCParse -> PeerRPCParse
+parseRPC pieceMap bs peerRPCParse =
+  BS.foldl (parseRPC' pieceMap) peerRPCParse bs
 
-parseRPC' selfState acc@(PeerRPCParse word8Buffer Nothing xs) word8
+parseRPC' (PieceMap pieceMap) acc@(PeerRPCParse word8Buffer Nothing xs) word8
   | newBuffer == (Seq.fromList [0,0,0,0]) = PeerRPCParse (Seq.empty) Nothing (xs ++ [PeerKeepAlive])
   | newBuffer == (Seq.fromList [0,0,0,1,0]) = PeerRPCParse (Seq.empty) Nothing (xs ++ [Choke])
   | newBuffer == (Seq.fromList [0,0,0,1,1]) = PeerRPCParse (Seq.empty) Nothing (xs ++ [UnChoke])
@@ -627,7 +629,6 @@ parseRPC' selfState acc@(PeerRPCParse word8Buffer Nothing xs) word8
 --                                            let bitfieldLength =  fromIntegral ((newBuffer !! 3) - 1)
                                             let bitfieldLength =  fromIntegral (fromJust $ bigEndianToInteger $ toList $ Seq.take 4 newBuffer) - 1
                                             let word8s = Seq.take bitfieldLength (Seq.drop 5 newBuffer)
-                                            let (PieceMap pieceMap) = selfPieceMap selfState
 
                                             if (ceiling ((fromIntegral . length $ pieceMap) / 8)) /= bitfieldLength then
                                               PeerRPCParse newBuffer (Just "ERROR parseRPC in BitField parse, (ceiling ((fromIntegral . length $ T.getTrackerPieces tracker) / 8)) /= bitfieldLength") xs
@@ -666,7 +667,7 @@ parseRPC' selfState acc@(PeerRPCParse word8Buffer Nothing xs) word8
       PeerRPCParse (Seq.drop (5 + 4 + 4 + blockLen) newBuffer) Nothing (xs ++ [Response index begin block])
   | otherwise = PeerRPCParse newBuffer Nothing xs
   where newBuffer = word8Buffer Seq.|> word8
-parseRPC' tracker (PeerRPCParse word8Buffer error xs) word8 = PeerRPCParse newBuffer error xs
+parseRPC' _ (PeerRPCParse word8Buffer error xs) word8 = PeerRPCParse newBuffer error xs
   where newBuffer = word8Buffer Seq.|> word8
 
 

@@ -8,6 +8,7 @@ import Utils (unhex, shaHashRaw, shaHash)
 import qualified System.IO as SIO
 import qualified Control.Concurrent.Chan as Chan
 import qualified Data.ByteString as BS
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.List as L
 import qualified Data.Map as M
@@ -197,7 +198,9 @@ setupFilesAndCreatePieceMap tracker killChan =  do
     print "creating file"
     createFile singleFileInfo
 
+  print "reading file"
   fileContents <- BS.readFile fileName
+  print "read file"
   let maybePieceMap = getCurrentPieceMap tracker fileContents
 
   when (isNothing maybePieceMap) $ do
