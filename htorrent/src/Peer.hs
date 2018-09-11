@@ -132,6 +132,7 @@ data PeerRPC = PeerKeepAlive
              | NotInterested
              | Have BS.ByteString
              | BitField PieceMap
+             | Cancel Integer Integer Integer
              | Request Integer Integer Integer
              | Response Integer Integer BS.ByteString
              deriving (Eq, Show)
@@ -412,6 +413,8 @@ recvLoop fsmState = do -- @(PeerState (PeerId peer_id) (Conn conn) _ _ (RPCParse
         -- TODO: clear your work state and send it back to the parent
         myLog fsmState "CANT DO WORK"
         updatedFSMStateWithoutWork <- sendWorkBackToManager updatedFSMState
+                                        >>= buildPieces
+                                        >>= sendPieces
         recvLoop updatedFSMStateWithoutWork-- newPeerRPCParse workChan responseChan currentWork
       else do
         -- finalPeerState <- sendFinishedWorkBackToManager updatedFSMState >>= tryToPullWork >>= sendRequests
@@ -620,7 +623,7 @@ parseRPC' (PieceMap pieceMap) acc@(PeerRPCParse word8Buffer Nothing xs) word8
   | newBuffer == (Seq.fromList [0,0,0,1,1]) = PeerRPCParse (Seq.empty) Nothing (xs ++ [UnChoke])
   | newBuffer == (Seq.fromList [0,0,0,1,2]) = PeerRPCParse (Seq.empty) Nothing (xs ++ [Interested])
   | newBuffer == (Seq.fromList [0,0,0,1,3]) = PeerRPCParse (Seq.empty) Nothing (xs ++ [NotInterested])
-  | Seq.take 5 newBuffer == (Seq.fromList [0,0,0,1,3]) =
+  | Seq.take 5 newBuffer == (Seq.fromList [0,0,0,5,4]) =
     if length newBuffer == 9 then
       PeerRPCParse (Seq.drop 9 newBuffer) Nothing (xs ++ [Have $ BS.pack $ toList $ Seq.take 4 $ Seq.drop 5 newBuffer])  --NOTE: I think that this maybe should be (Have $ BS.pack $ take 1 $ drop 5 unpackedMsg)
     else
@@ -665,6 +668,10 @@ parseRPC' (PieceMap pieceMap) acc@(PeerRPCParse word8Buffer Nothing xs) word8
       let begin = fromIntegral $ fromJust $ bigEndianToInteger $ toList beginWord8s
       let block = BS.pack $ toList blockWord8s
       PeerRPCParse (Seq.drop (5 + 4 + 4 + blockLen) newBuffer) Nothing (xs ++ [Response index begin block])
+  | Seq.take 5 newBuffer == (Seq.fromList [0,0,0,13,8]) = if length newBuffer >= 17 then
+                                          PeerRPCParse Seq.empty Nothing (xs ++ [Cancel (fromIntegral $ fromJust $ bigEndianToInteger $ toList $ Seq.take 4 $ Seq.drop 5 newBuffer) (fromIntegral $ fromJust $ bigEndianToInteger $ toList $ Seq.take 4 $ Seq.drop 9 newBuffer) (fromIntegral $ fromJust $ bigEndianToInteger $ toList $ Seq.take 4 $ Seq.drop 13 newBuffer)])
+                                        else
+                                          PeerRPCParse newBuffer Nothing xs
   | otherwise = PeerRPCParse newBuffer Nothing xs
   where newBuffer = word8Buffer Seq.|> word8
 parseRPC' _ (PeerRPCParse word8Buffer error xs) word8 = PeerRPCParse newBuffer error xs
@@ -689,9 +696,6 @@ notInterested = BS.pack [0,0,0,1,3]
 have :: BS.ByteString -> BS.ByteString
 have pieceIndex = BS.concat [BS.pack [0,0,0,5,4], pieceIndex]
 
---bitfield :: BS.ByteString -> BS.ByteString
---bitfield payload = BS.concat [BS.pack [0,0,0,1 + (fromIntegral . BS.length $ payload), 5], payload]
-
 isValidBitField :: BS.ByteString -> Bool
 isValidBitField bs = len == fromIntegral (length $ drop 5 xs)
   where xs = BS.unpack bs
@@ -714,7 +718,13 @@ trackerToPeerHandshake (T.Tracker (T.PeerId peer_id) _ _ _ (T.InfoHash info_hash
 initiateHandshake :: T.Tracker -> Shared.Peer -> IO (Maybe (PeerResponse, Socket))
 initiateHandshake tracker peer = do
   (response, conn) <- sendHandshake peer $ trackerToPeerHandshake tracker
-  return ((\x -> (x, conn)) <$> (readHandShake response >>= validateHandshake tracker))
+  let validated = readHandShake response >>= validateHandshake tracker
+  case validated of
+    Nothing -> do
+      close conn
+      return Nothing
+    Just x ->
+      return $ Just (x, conn)
 
 handshake :: BS.ByteString -> BS.ByteString -> BS.ByteString
 handshake info_hash peer_id =  BS.concat [pstrlen, pstr, reserved, unhex info_hash, peer_id]
@@ -741,9 +751,9 @@ readHandShake r = PeerResponse <$> (InfoHash <$> infoHash) <*> (PeerId <$> peerI
         peerId = BS.drop 20 <$> afterEmpty
 
 validateHandshake :: T.Tracker -> PeerResponse -> Maybe PeerResponse
-validateHandshake (T.Tracker _ _ _ _ (T.InfoHash info_hash) _ _ _)
-                  pr@(PeerResponse (InfoHash peer_info_hash) (PeerId peer_peer_id)) =
-                  if unhex info_hash == peer_info_hash then
+validateHandshake tracker@(T.Tracker _ _ _ _ (T.InfoHash info_hash) _ _ _)
+                  pr@(PeerResponse (InfoHash peerInfoHash) (PeerId peerID)) =
+                  if unhex info_hash == peerInfoHash && (T.getTrackerPeerId tracker /= peerID)then
                     Just pr
                   else
                     Nothing
