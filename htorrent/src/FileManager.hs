@@ -227,7 +227,16 @@ downloadedSoFar tracker pieceMap = do
     (fromIntegral $ length $ filter snd pieceMap) * getTrackerPieceLength tracker
 
 forkPeer :: Tracker.Tracker -> Chan.Chan WorkMessage -> Chan.Chan ResponseMessage -> Chan.Chan a -> Peer.PieceMap -> Peer  -> IO ThreadId
-forkPeer tracker workChan responseChan broadcastChan pieceMap peer = forkFinally (Peer.start tracker peer workChan responseChan broadcastChan pieceMap) (errorHandler peer responseChan)
+forkPeer tracker workChan responseChan broadcastChan pieceMap peer =
+  forkFinally (Peer.start tracker peer workChan responseChan broadcastChan pieceMap) (errorHandler peer responseChan)
+
+errorHandler :: (Show a, Show b) => Peer -> Chan.Chan ResponseMessage -> Either a b -> IO ()
+errorHandler peer chan (Left x) = do
+  Chan.writeChan chan $ Error peer
+  putStrLn $ "FORK FINALLY HIT ERROR ON START PEER: " ++ show peer ++ " " ++ show x
+errorHandler peer chan (Right x) = do
+  Chan.writeChan chan $ Error peer
+  putStrLn $ "FORK FINALLY SUCCEEDED: " ++ show peer ++ " " ++ show x
 
 getPeers :: TrackerResponse -> [Peer]
 getPeers (TrackerResponse (Peers peers) _ _ _ _ _ _) = peers
@@ -323,13 +332,6 @@ readBlock tracker filePath (BlockRequest (PieceIndex pieceIndex) (Begin begin) (
           SIO.hSeek h SIO.AbsoluteSeek ((getTrackerPieceLength tracker * pieceIndex) + begin)
           BS.hGet h $ fromIntegral rl
 
-errorHandler :: (Show a, Show b) => Peer -> Chan.Chan ResponseMessage -> Either a b -> IO ()
-errorHandler peer chan (Left x) = do
-  Chan.writeChan chan $ Error peer
-  -- print $ "FORK FINALLY HIT ERROR ON START PEER: " ++ show peer ++ " " ++ show x
-errorHandler peer chan (Right x) = do
-  Chan.writeChan chan $ Error peer
-  -- print $ "FORK FINALLY SUCCEEDED: " ++ show peer ++ " " ++ show x
 
 
 

@@ -1,27 +1,25 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Server (start) where
 
+import Control.Concurrent (forkFinally)
 import Control.Concurrent.Chan as Chan
-import Control.Concurrent (forkFinally, threadDelay) -- threadWaitRead, threadWaitWrite
+import Control.Monad (forever, void)
 import Network.Socket hiding (recv)
-import Network.Socket.ByteString (recv, sendAll, send)
+import Network.Socket.ByteString (recv, sendAll)
 import qualified Control.Exception as E
-import Control.Monad (unless, forever, void)
-import Text.Printf (printf)
-import Data.Maybe (isJust)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified System.Clock as Clock
 
-import qualified Peer as Peer
-import qualified Shared as Shared
-import qualified Tracker as Tracker
+import qualified Peer
+import qualified Shared
+import qualified Tracker
 
 start :: String -> Tracker.Tracker -> Chan.Chan Shared.WorkMessage -> Chan.Chan Shared.ResponseMessage -> Chan.Chan a -> Peer.PieceMap -> IO ()
 start port tracker workC responseChan broadcastChan pieceMap = do
-  print "Running, and listening on port %s\n"
-  printf "HINT: run echo \"did you get this message?\"|  nc localhost %s\n" port
+  putStrLn $ "BitTorrent TCP server running, and listening on port "  <> (show port)
   E.bracket (addrIO >>= open) close loop
+
   where hints = defaultHints { addrSocketType = Stream
                              , addrFlags = [AI_PASSIVE]
                              }
@@ -31,51 +29,49 @@ start port tracker workC responseChan broadcastChan pieceMap = do
           -- Solves issue withNetwork.Socket.bind: resource busy (Address already in use)
           setSocketOption sock ReuseAddr 1
           bind sock (addrAddress addr)
-          let fd = fdSocket sock
-          setCloseOnExecIfNeeded fd
+          setCloseOnExecIfNeeded $ fdSocket sock
           listen sock 10
           return sock
+
         loop sock = forever $ do
           (conn, peer) <- accept sock
-          putStrLn $ "LOOP: Accepted connection " ++ (show conn) ++ " from " ++ (show peer)
+          putStrLn $ "LOOP: Accepted connection " <> show conn
+                                                  <> " from "
+                                                  <> show peer
+                                                  <> "\nBlocking until handshake is received"
 
-          void $ forkFinally (talk conn peer) (\_ -> print ("closing " ++ (show conn) ++ "  from " ++ (show peer)) >> close conn)
-
-        -- loopTalk conn peer peerRPCParse broadcastChan = do
-        --   -- 3. respond to requests
-        --   -- 4. send have messages as you get more data
-        --   --sendAll conn Peer.keepAlive
-        --   msg <- recv conn 16384
-        --   let newPeerRPCParse@(Peer.PeerRPCParse _ maybeErrors _) = Peer.parseRPC tracker msg peerRPCParse
-        --   print $ "LOOPTALK: newPeerRPCParse " ++ show newPeerRPCParse
-        --   unless (BS.null msg || isJust maybeErrors) $ do
-        --     print $ "LOOPTALK: ending " ++ (show $ BS.null msg) ++ " " ++ (show $ isJust maybeErrors)
-        --     loopTalk conn peer newPeerRPCParse broadcastChan
+          let threadEndHandler _ = putStrLn ("closing " <> show conn <> "  from " <> show peer)
+                                   >> close conn
+          void $ forkFinally (talk conn peer) threadEndHandler
 
         talk conn peer = do
-          -- 1. send handshake
-          -- 1.1. send interested
-          -- 1.2. send unchoke
           msg <- recv conn 68
           let maybeHandshakeResponse = Peer.readHandShake msg >>= Peer.validateHandshake tracker
+          putStrLn $ "Peer " <> show peer
+                             <> " sent handshake "
+                             <> show maybeHandshakeResponse
+                             <> "\nraw: "
+                             <> UTF8.toString msg
+                             <> " as the handshake"
+
           case maybeHandshakeResponse of
             Just (Peer.PeerResponse _ (Peer.PeerId peerId)) -> do
               let handshake = Peer.trackerToPeerHandshake tracker
               sendAll conn handshake
               let bf = Peer.pieceMapToBitField pieceMap
               time <- Clock.getTime Clock.Monotonic
-              --let peerState = Peer.defultPeerState peerId_id conn tracker workChan responseChan (UTF8.fromString $ show peer) time pieceMap
-              let fsmState = Peer.buildFSMState tracker (UTF8.fromString $ show peer) peerId conn workC responseChan time pieceMap
-              Peer.myLog fsmState $ " sending bitfield: " ++ (show $ BS.unpack bf)
+              let fsmState = Peer.buildFSMState tracker (UTF8.fromString $ show peer) peerId conn workC responseChan time pieceMap Peer.Peer
+              Peer.myLog fsmState $ " got handshake: " <> show (BS.unpack bf)
+                                                       <> " along with interested & unchoke messages "
+              Peer.myLog fsmState $ " sending bitfield: " <> show (BS.unpack bf)
+                                                          <> " along with interested & unchoke messages "
               sendAll conn bf
               sendAll conn Peer.interested
               sendAll conn Peer.unchoke
-              -- 2. send bitmap
-              -- Peer.myLog fsmState " starting recvLoop"
-                    -- TODO: You may need to close the connection if this fails, not sure of the consequences of this if I don't close it.
-              E.catch (Peer.recvLoop fsmState) (\e ->
-                                                      Peer.myLog  fsmState $ " HIT EXCEPTION " ++ (show (e :: E.SomeException) )
-                                                  )
+              let handleException e = Peer.myLog fsmState $ " HIT EXCEPTION " <> show (e :: E.SomeException)
+              E.catch (Peer.recvLoop fsmState) handleException
             Nothing -> do
-              print $ "Peer " ++ (show peer) ++ " got invalid handshake response " ++ (show maybeHandshakeResponse)
+              putStrLn $ "Peer " <> show peer
+                                 <> " got invalid handshake response "
+                                 <> show maybeHandshakeResponse
               return ()

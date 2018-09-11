@@ -20,7 +20,6 @@ main = do
   killChan <- newChan
   let arg1:arg2:_ = args
   _ <- forkIO $ Lib.run arg1 arg2 killChan
-  putStrLn "Press q to exit"
   exitOnQ killChan
 
 exitOnQ killChan = do
