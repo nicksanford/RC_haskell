@@ -363,9 +363,9 @@ sendRequests fsmState = do
         f x = return x
 
 myLog :: FSMState -> String -> IO ()
-myLog fsmState xs = do
-  time <- Clock.getTime Clock.Monotonic
-  putStrLn $ "THREAD " ++ (UTF8.toString $ fsmId fsmState) ++ " PEER " ++ (UTF8.toString $ peerId $ getPeer fsmState) ++ " AT " ++ (show time) ++ xs 
+myLog fsmState xs = return () -- do
+  -- time <- Clock.getTime Clock.Monotonic
+  -- putStrLn $ "THREAD " ++ (UTF8.toString $ fsmId fsmState) ++ " PEER " ++ (UTF8.toString $ peerId $ getPeer fsmState) ++ " AT " ++ (show time) ++ xs 
 
 -- TODO Got to figure out how to send a keep alive to every peer every 30 seconds w/o blocking the thread
 recvLoop :: FSMState -> IO ()
@@ -566,9 +566,9 @@ buildFSMState tracker fsmStateId peerId conn workC responseChan time pieceMap =
 
 start :: T.Tracker -> Shared.Peer -> Chan.Chan Shared.WorkMessage -> Chan.Chan Shared.ResponseMessage -> Chan.Chan a -> PieceMap -> IO ()
 start tracker peer@(Shared.Peer ip port) workC responseChan broadcastC pieceMap =  do
-  print $ "STARTPEER Peer is: " ++ show peer
+  -- print $ "STARTPEER Peer is: " ++ show peer
   maybePeerResponse <- initiateHandshake tracker peer
-  print $ "STARTPEER maybePeerResponse: " ++ show maybePeerResponse
+  -- print $ "STARTPEER maybePeerResponse: " ++ show maybePeerResponse
   unless (isNothing maybePeerResponse) $ do
     let (peerResponse@(PeerResponse _ (PeerId peer_id)), conn) = fromJust maybePeerResponse
     -- print $ "STARTPEER sending interested for: " ++ show peer
@@ -760,7 +760,7 @@ sendHandshake (Shared.Peer ip port) bs = do
   -- exactly how many bytes I need to read in for the handshake response.
   -- 49 + (length "BitTorrent protocol") == 58
   msg <- recv sock 68
-  getSocketOption sock RecvTimeOut >>= (\x -> print $ "RecvTimeOut : " ++ (show x))
+  -- getSocketOption sock RecvTimeOut >>= (\x -> print $ "RecvTimeOut : " ++ (show x))
   return (msg, sock)
 
   where hints = defaultHints { addrSocketType = Stream }

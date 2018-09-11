@@ -8,7 +8,6 @@ import Utils (unhex, shaHashRaw, shaHash)
 import qualified System.IO as SIO
 import qualified Control.Concurrent.Chan as Chan
 import qualified Data.ByteString as BS
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.List as L
 import qualified Data.Map as M
@@ -101,9 +100,9 @@ responseToMaybeRequest _ = Nothing
 
 
 loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWorkToBeDone = do
-  print $ "RESPONSE CHANNEL: number of active peers: " ++ (show $ length peers) ++ " peers " ++ (show peers)
+  -- print $ "RESPONSE CHANNEL: number of active peers: " ++ (show $ length peers) ++ " peers " ++ (show peers)
   response <- Chan.readChan responseChan
-  print $ "RESPONSE CHANNEL got data"
+  --print $ "RESPONSE CHANNEL got data"
   let Tracker.SingleFileInfo (Tracker.Name bsFileName) (Tracker.Length fileLength) _ = getTrackerSingleFileInfo tracker
   let fileName = UTF8.toString bsFileName
 
@@ -112,41 +111,41 @@ loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWor
       let hash = UTF8.toString $ shaHash c
       let hashFilePath = (fileName ++ "dir/" ++ hash)
       BS.writeFile hashFilePath c
-      print $ "RESPONSE CHANNEL WROTE " ++ hashFilePath
+      --print $ "RESPONSE CHANNEL WROTE " ++ hashFilePath
       writePiece tracker fileName (PieceResponse (PieceIndex i) (PieceContent c))
-      print $ "RESPONSE CHANNEL: removing piece " ++ (show i) ++ " from checkouts"
+      --print $ "RESPONSE CHANNEL: removing piece " ++ (show i) ++ " from checkouts"
       let newCo = M.delete i checkouts
-      print $ "RESPONSE CHANNEL: new checkouts " ++ (show newCo)
+      --print $ "RESPONSE CHANNEL: new checkouts " ++ (show newCo)
       let newPM = (\(pieceIndex, (k,v)) -> if pieceIndex == i then (k,True) else (k,v)) <$> zip [0..] pieceMap
       return (peers, newPM, newCo)
     (Error p) -> do
       let n = filter (/=p) peers
-      print $ "RESPONSE CHANNEL: Peer " ++ show p ++ " is no longer running. new peer list: " ++ show n
+      --print $ "RESPONSE CHANNEL: Peer " ++ show p ++ " is no longer running. new peer list: " ++ show n
       return (n, pieceMap, checkouts)
     co@(CheckOut (PeerThreadId peerThreadId) (PieceIndex i) timestmap) ->
       if M.member i checkouts then do
-        print $ "ERROR: Got checkout message for work already checkedout this should be impossible " ++ (show co)
+        --print $ "ERROR: Got checkout message for work already checkedout this should be impossible " ++ (show co)
         Chan.writeChan killChan ()
         return (peers, pieceMap, checkouts)
       else do
         let new = M.insert i (peerThreadId, timestmap) checkouts
-        print $ "RESPONSE CHANNEL: adding checkout " ++ (show co)
-        print $ "RESPONSE CHANNEL: new checkouts " ++ (show new)
+        -- print $ "RESPONSE CHANNEL: adding checkout " ++ (show co)
+        -- print $ "RESPONSE CHANNEL: new checkouts " ++ (show new)
         return (peers, pieceMap, new)
     hb@(HeartBeat _ (PieceIndex i)) -> do
       let look = M.lookup i checkouts
 
       if isNothing look then do
-        print $ "ERROR: Got heartbeat message for something not checked out, this should be impossible " ++ (show $  hb)
+        -- print $ "ERROR: Got heartbeat message for something not checked out, this should be impossible " ++ (show $  hb)
         Chan.writeChan killChan ()
         return (peers, pieceMap, checkouts)
       else do
         time <- Clock.getTime Clock.Monotonic
         let newCo = M.adjust (\(peerThreadId, _) -> (peerThreadId, time)) i checkouts
-        print $ "RESPONSE CHANNEL: Got heartbeat: " ++ (show hb) ++ " updated checkouts: " ++ (show newCo)
+        -- print $ "RESPONSE CHANNEL: Got heartbeat: " ++ (show hb) ++ " updated checkouts: " ++ (show newCo)
         return (peers, pieceMap, newCo)
     (Failed f) -> do
-      print $ "RESPONSE CHANNEL: hit failure " ++ (show f)
+      -- print $ "RESPONSE CHANNEL: hit failure " ++ (show f)
       return (peers, pieceMap, checkouts)
     CheckWork -> do
         time <- Clock.getTime Clock.Monotonic
@@ -158,12 +157,12 @@ loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWor
                      (newChenckouts, workToBeReDone)
                 )
         let (newCo, newWork)= M.foldrWithKey f (checkouts, []) checkouts
-        print $ "RESPONSE CHANNEL: Dead indexes & peers " ++ (show newWork)
+        -- print $ "RESPONSE CHANNEL: Dead indexes & peers " ++ (show newWork)
         let newWorkIndxs :: [Integer]
             (newWorkIndxs, _) = unzip newWork
         let regeneratedWork = filter (\(Work (PieceIndex i) _) -> i `elem` newWorkIndxs) filteredWorkToBeDone
         Chan.writeList2Chan workChan regeneratedWork
-        print $ "RESPONSE CHANNEL: Regenerated work " ++ (show regeneratedWork)
+        -- print $ "RESPONSE CHANNEL: Regenerated work " ++ (show regeneratedWork)
         _ <- forkIO $ checkoutTimer responseChan
         return (peers, pieceMap, newCo)
     CheckPeers ->
@@ -195,23 +194,23 @@ setupFilesAndCreatePieceMap tracker killChan =  do
   let fileName = UTF8.toString bsFileName
   fileExists <- Dir.doesFileExist fileName
   unless fileExists $ do
-    print "creating file"
+    -- print "creating file"
     createFile singleFileInfo
 
-  print "reading file"
+  -- print "reading file"
   fileContents <- BS.readFile fileName
-  print "read file"
+  -- print "read file"
   let maybePieceMap = getCurrentPieceMap tracker fileContents
 
   when (isNothing maybePieceMap) $ do
-    print "file is invalid, wiping and starting fresh"
+    -- print "file is invalid, wiping and starting fresh"
     createFile singleFileInfo
 
   fileContents2 <- BS.readFile fileName
   let maybePieceMap2 = getCurrentPieceMap tracker fileContents2
 
   when (isNothing maybePieceMap2) $ do
-    print "tracker is corrupt"
+    -- print "tracker is corrupt"
     Chan.writeChan killChan ()
 
   Dir.createDirectoryIfMissing False (fileName ++ "dir")
@@ -256,9 +255,9 @@ start tracker port killChan = do
   _ <- forkIO $ Server.start port tracker workChan responseChan broadcastChan (Peer.PieceMap pieceMap)
 
   maybeTrackerResponse <- trackerRequest tracker port (downloadedSoFar tracker pieceMap)
-  print ("maybeTrackerResponse: " ++ show maybeTrackerResponse)
+  -- print ("maybeTrackerResponse: " ++ show maybeTrackerResponse)
   when (isNothing maybeTrackerResponse) $ do
-    print "ERROR: got empty tracker response"
+    -- print "ERROR: got empty tracker response"
     Chan.writeChan killChan ()
 
   let trackerResponse = fromJust maybeTrackerResponse
@@ -327,10 +326,10 @@ readBlock tracker filePath (BlockRequest (PieceIndex pieceIndex) (Begin begin) (
 errorHandler :: (Show a, Show b) => Peer -> Chan.Chan ResponseMessage -> Either a b -> IO ()
 errorHandler peer chan (Left x) = do
   Chan.writeChan chan $ Error peer
-  print $ "FORK FINALLY HIT ERROR ON START PEER: " ++ show peer ++ " " ++ show x
+  -- print $ "FORK FINALLY HIT ERROR ON START PEER: " ++ show peer ++ " " ++ show x
 errorHandler peer chan (Right x) = do
   Chan.writeChan chan $ Error peer
-  print $ "FORK FINALLY SUCCEEDED: " ++ show peer ++ " " ++ show x
+  -- print $ "FORK FINALLY SUCCEEDED: " ++ show peer ++ " " ++ show x
 
 
 

@@ -71,7 +71,7 @@ start port tracker workC responseChan broadcastChan pieceMap = do
               sendAll conn Peer.interested
               sendAll conn Peer.unchoke
               -- 2. send bitmap
-              Peer.myLog fsmState " starting recvLoop"
+              -- Peer.myLog fsmState " starting recvLoop"
                     -- TODO: You may need to close the connection if this fails, not sure of the consequences of this if I don't close it.
               E.catch (Peer.recvLoop fsmState) (\e ->
                                                       Peer.myLog  fsmState $ " HIT EXCEPTION " ++ (show (e :: E.SomeException) )
