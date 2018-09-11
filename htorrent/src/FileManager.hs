@@ -108,9 +108,9 @@ loop tracker workChan responseChan peers killChan pieceMap checkouts filteredWor
 
   (newPeers, newPieceMap, newCheckouts) <- case response of
     (Succeeded (PieceResponse (PieceIndex i) (PieceContent c))) -> do
-      let hash = UTF8.toString $ shaHash c
-      let hashFilePath = (fileName ++ "dir/" ++ hash)
-      BS.writeFile hashFilePath c
+      -- let hash = UTF8.toString $ shaHash c
+      -- let hashFilePath = (fileName ++ "dir/" ++ hash)
+      -- BS.writeFile hashFilePath c
       --print $ "RESPONSE CHANNEL WROTE " ++ hashFilePath
       writePiece tracker fileName (PieceResponse (PieceIndex i) (PieceContent c))
       --print $ "RESPONSE CHANNEL: removing piece " ++ (show i) ++ " from checkouts"
@@ -213,7 +213,7 @@ setupFilesAndCreatePieceMap tracker killChan =  do
     -- print "tracker is corrupt"
     Chan.writeChan killChan ()
 
-  Dir.createDirectoryIfMissing False (fileName ++ "dir")
+  -- Dir.createDirectoryIfMissing False (fileName ++ "dir")
 
   return $ fromJust maybePieceMap2
 

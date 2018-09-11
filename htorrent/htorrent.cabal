@@ -21,7 +21,6 @@ library
                      , Tracker
                      , Utils
                      , Peer
-                     , TrackerPrint
                      , FileManager
                      , Shared
   build-depends:       base >= 4.7 && < 5
